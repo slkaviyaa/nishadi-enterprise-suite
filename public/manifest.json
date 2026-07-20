@@ -1,10 +1,11 @@
 {
   "name": "Nishadi Motors POS",
-  "short_name": "NishadiPOS",
+  "short_name": "Nishadi POS",
+  "description": "Enterprise POS system for Nishadi Motors by Ceylon Digi Solutions",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#ffffff",
-  "theme_color": "#000000",
+  "theme_color": "#0d6efd",
   "icons": [
     {
       "src": "/icon-192x192.png",
