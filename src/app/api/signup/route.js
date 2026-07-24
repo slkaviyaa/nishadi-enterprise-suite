@@ -1,14 +1,9 @@
 import { createClient } from '@supabase/supabase-js'
-import { Resend } from 'resend'
 
 const supabaseAdmin = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY
 )
-const resend = new Resend(process.env.RESEND_API_KEY)
-
-// Generate 6-digit OTP
-const generateOTP = () => Math.floor(100000 + Math.random() * 900000).toString()
 
 export async function POST(request) {
   const { email, password, display_name, invite_code } = await request.json()
@@ -25,11 +20,11 @@ export async function POST(request) {
     return Response.json({ error: 'Invalid invite code' }, { status: 400 })
   }
 
-  // 2. Create auth user (email_confirm: false)
+  // 2. Create auth user (email_confirm: false → Supabase auto‑sends confirmation email)
   const { data: authUser, error: authError } = await supabaseAdmin.auth.admin.createUser({
     email,
     password,
-    email_confirm: false
+    email_confirm: false   // ← Supabase sends confirmation link
   })
   if (authError) return Response.json({ error: authError.message }, { status: 400 })
 
@@ -43,29 +38,8 @@ export async function POST(request) {
       display_name: display_name || email,
       permissions: ['all']
     })
+
   if (staffError) return Response.json({ error: staffError.message }, { status: 400 })
 
-  // 4. Generate OTP + save
-  const otp = generateOTP()
-  const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString() // 10 min
-
-  await supabaseAdmin
-    .from('staff')
-    .update({ otp, otp_expires_at: expiresAt })
-    .eq('id', authUser.user.id)
-
-  // 5. Send OTP email
-  try {
-    await resend.emails.send({
-      from: 'Nishadi Motors <noreply@yourdomain.com>',
-      to: email,
-      subject: 'Your Verification Code',
-      html: `<p>Your verification code is: <strong>${otp}</strong></p><p>Expires in 10 minutes.</p>`
-    })
-  } catch (err) {
-    console.error('Email send error:', err)
-    // Still return success, but note email may not arrive
-  }
-
-  return Response.json({ success: true, message: 'Verification code sent to your email.' })
+  return Response.json({ success: true, message: 'Confirmation email sent. Please check your inbox.' })
 }
