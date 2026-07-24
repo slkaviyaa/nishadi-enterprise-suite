@@ -32,14 +32,22 @@ export function AuthProvider({ children }) {
   }, [])
 
   const loadStaff = async (userId) => {
-    const { data } = await supabase.from('staff').select('*').eq('id', userId).single()
-    if (data) { setBranch(data.branch_id); setUser(data) }
+    // Use RPC function (bypasses PostgREST 406)
+    const { data, error } = await supabase.rpc('get_staff_by_id', { user_id: userId })
+    if (error) {
+      console.error('Staff load error:', error)
+      setLoading(false)
+      return
+    }
+    if (data && data.length > 0) {
+      setBranch(data[0].branch_id)
+      setUser(data[0])
+    }
     setLoading(false)
   }
 
   if (loading) return <div className="flex h-screen items-center justify-center text-2xl">Loading...</div>
 
-  // Authenticated users – MainLayout with Sidebar
   if (session) {
     if (!branch) return <div className="alert alert-error m-4">No branch assigned. Contact admin.</div>
     return (
@@ -49,7 +57,6 @@ export function AuthProvider({ children }) {
     )
   }
 
-  // Public routes – no Sidebar
   if (isPublic) {
     return (
       <AuthContext.Provider value={{ branch: null, user: null }}>

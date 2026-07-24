@@ -24,9 +24,14 @@ export async function POST(request) {
   const { data: authUser, error: authError } = await supabaseAdmin.auth.admin.createUser({
     email,
     password,
-    email_confirm: true   // ← instant, no email needed
+    email_confirm: true   // ← email confirm skip, instant login
   })
-  if (authError) return Response.json({ error: authError.message }, { status: 400 })
+  if (authError) {
+    if (authError.message.includes('already') || authError.message.includes('duplicate')) {
+      return Response.json({ error: 'An account with this email already exists. Please sign in.' }, { status: 400 })
+    }
+    return Response.json({ error: authError.message }, { status: 400 })
+  }
 
   // 3. Insert staff record
   const { error: staffError } = await supabaseAdmin
