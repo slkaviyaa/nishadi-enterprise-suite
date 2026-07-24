@@ -1,15 +1,21 @@
 'use client'
 import { createContext, useContext, useEffect, useState } from 'react'
+import { usePathname } from 'next/navigation'
 import { supabase } from '../lib/supabaseClient'
 import Login from '../components/Login'
+import MainLayout from '../components/MainLayout'
 
 const AuthContext = createContext(null)
 
 export function AuthProvider({ children }) {
+  const pathname = usePathname()
   const [session, setSession] = useState(null)
   const [branch, setBranch] = useState(null)
   const [user, setUser] = useState(null)
   const [loading, setLoading] = useState(true)
+
+  const publicRoutes = ['/', '/signup']
+  const isPublic = publicRoutes.includes(pathname)
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -32,14 +38,27 @@ export function AuthProvider({ children }) {
   }
 
   if (loading) return <div className="flex h-screen items-center justify-center text-2xl">Loading...</div>
-  if (!session) return <Login />
-  if (!branch) return <div className="alert alert-error m-4">No branch assigned. Contact admin.</div>
 
-  return (
-    <AuthContext.Provider value={{ branch, user, permissions: user?.permissions || [] }}>
-  {children}
-</AuthContext.Provider>
-  )
+  // Authenticated users – MainLayout with Sidebar
+  if (session) {
+    if (!branch) return <div className="alert alert-error m-4">No branch assigned. Contact admin.</div>
+    return (
+      <AuthContext.Provider value={{ branch, user }}>
+        <MainLayout>{children}</MainLayout>
+      </AuthContext.Provider>
+    )
+  }
+
+  // Public routes – no Sidebar
+  if (isPublic) {
+    return (
+      <AuthContext.Provider value={{ branch: null, user: null }}>
+        {pathname === '/' ? <Login /> : children}
+      </AuthContext.Provider>
+    )
+  }
+
+  return <Login />
 }
 
 export const useAuth = () => useContext(AuthContext)

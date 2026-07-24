@@ -3,10 +3,34 @@ import { createContext, useContext, useEffect, useState } from 'react'
 import { supabase } from '../lib/supabaseClient'
 import { useAuth } from './AuthContext'
 
-const SettingsContext = createContext(null)
+// default value to avoid null destructure
+const SettingsContext = createContext({
+  settings: {
+    pos_enabled: true,
+    inventory_enabled: true,
+    customers_enabled: true,
+    reports_enabled: true,
+    staff_enabled: true,
+    shop_enabled: true,
+    users_enabled: true,
+    bill_settings_enabled: true,
+    tax_enabled: false,
+    tax_rate: 0,
+    currency_symbol: 'Rs. ',
+    theme: 'light',
+    date_format: 'DD/MM/YYYY',
+    bill_header: 'Nishadi Motors',
+    bill_footer: 'Thank you!',
+    low_stock_global: 5,
+    invite_code: '',
+  },
+  refetchSettings: () => {},
+})
 
 export function SettingsProvider({ children }) {
-  const { branch } = useAuth()
+  const auth = useAuth()
+  const branch = auth?.branch
+
   const [settings, setSettings] = useState({
     pos_enabled: true, inventory_enabled: true, customers_enabled: true,
     reports_enabled: true, staff_enabled: true, shop_enabled: true,
@@ -14,7 +38,7 @@ export function SettingsProvider({ children }) {
     tax_enabled: false, tax_rate: 0, currency_symbol: 'Rs. ',
     theme: 'light', date_format: 'DD/MM/YYYY',
     bill_header: 'Nishadi Motors', bill_footer: 'Thank you!',
-    low_stock_global: 5,
+    low_stock_global: 5, invite_code: '',
   })
 
   const fetchSettings = async () => {
@@ -27,17 +51,17 @@ export function SettingsProvider({ children }) {
     if (data) setSettings(prev => ({ ...prev, ...data }))
   }
 
-  useEffect(() => { fetchSettings() }, [branch])
+  useEffect(() => {
+    fetchSettings()
+  }, [branch])
 
-  // Theme apply
+  // Apply theme
   useEffect(() => {
     const root = document.documentElement
     const applyTheme = (theme) => {
-      if (theme === 'dark') {
-        root.classList.add('dark')
-      } else if (theme === 'light') {
-        root.classList.remove('dark')
-      } else if (theme === 'system') {
+      if (theme === 'dark') root.classList.add('dark')
+      else if (theme === 'light') root.classList.remove('dark')
+      else if (theme === 'system') {
         const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches
         root.classList.toggle('dark', prefersDark)
       }
