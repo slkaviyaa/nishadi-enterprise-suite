@@ -20,11 +20,11 @@ export async function POST(request) {
     return Response.json({ error: 'Invalid invite code' }, { status: 400 })
   }
 
-  // 2. Create auth user (email_confirm: false → Supabase auto‑sends confirmation email)
+  // 2. Create auth user (instant confirm)
   const { data: authUser, error: authError } = await supabaseAdmin.auth.admin.createUser({
     email,
     password,
-    email_confirm: false   // ← Supabase sends confirmation link
+    email_confirm: true   // ← instant, no email needed
   })
   if (authError) return Response.json({ error: authError.message }, { status: 400 })
 
@@ -41,5 +41,5 @@ export async function POST(request) {
 
   if (staffError) return Response.json({ error: staffError.message }, { status: 400 })
 
-  return Response.json({ success: true, message: 'Confirmation email sent. Please check your inbox.' })
+  return Response.json({ success: true, message: 'Account created! You can now sign in.' })
 }
