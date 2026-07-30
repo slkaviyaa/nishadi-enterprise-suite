@@ -1,43 +1,32 @@
 'use client'
 import { useState } from 'react'
 import { supabase } from '../lib/supabaseClient'
+import { useAuth } from '../context/AuthContext'
 import Link from 'next/link'
+import { FcGoogle } from 'react-icons/fc'
 
 export default function Login() {
-  const [identifier, setIdentifier] = useState('')   // email or username
+  const [identifier, setIdentifier] = useState('')
   const [password, setPassword] = useState('')
-  const [inviteCode, setInviteCode] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  const [googleLoading, setGoogleLoading] = useState(false)
+
+  const auth = useAuth()
+  const signInWithGoogle = auth?.signInWithGoogle
 
   const handleLogin = async (e) => {
     e.preventDefault()
     setLoading(true)
     setError('')
 
-    // 1. Verify invite code
-    const res = await fetch('/api/verify-invite', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ code: inviteCode })
-    })
-    const { valid, error: inviteError } = await res.json()
-    if (!valid) {
-      setError(inviteError || 'Invalid invite code')
-      setLoading(false)
-      return
-    }
-
     let emailToUse = identifier
-
-    // 2. If not an email (no '@'), treat as username
     if (!identifier.includes('@')) {
       const { data: staffData } = await supabase
         .from('staff')
         .select('username')
         .eq('username', identifier)
         .maybeSingle()
-
       if (!staffData) {
         setError('Invalid username or email')
         setLoading(false)
@@ -46,10 +35,20 @@ export default function Login() {
       emailToUse = `${staffData.username}@nishadi.internal`
     }
 
-    // 3. Sign in
     const { error } = await supabase.auth.signInWithPassword({ email: emailToUse, password })
     if (error) setError(error.message)
     setLoading(false)
+  }
+
+  const handleGoogleLogin = async () => {
+    setGoogleLoading(true)
+    setError('')
+    try {
+      await signInWithGoogle()
+    } catch (err) {
+      setError('Google sign in failed')
+    }
+    setGoogleLoading(false)
   }
 
   return (
@@ -76,14 +75,6 @@ export default function Login() {
           <form onSubmit={handleLogin} className="space-y-4">
             <input
               type="text"
-              placeholder="Invite Code (Security Key)"
-              className="w-full bg-white/10 border border-white/20 rounded-xl px-4 py-3 text-white placeholder-white/60 focus:outline-none focus:border-white/50 transition"
-              value={inviteCode}
-              onChange={e => setInviteCode(e.target.value)}
-              required
-            />
-            <input
-              type="text"
               placeholder="Email or Username"
               className="w-full bg-white/10 border border-white/20 rounded-xl px-4 py-3 text-white placeholder-white/60 focus:outline-none focus:border-white/50 transition"
               value={identifier}
@@ -106,6 +97,22 @@ export default function Login() {
               {loading ? 'Signing in...' : 'Sign In'}
             </button>
           </form>
+
+          <div className="flex items-center my-4">
+            <div className="flex-1 border-t border-white/20"></div>
+            <span className="px-3 text-white/60 text-sm">OR</span>
+            <div className="flex-1 border-t border-white/20"></div>
+          </div>
+
+          <button
+            onClick={handleGoogleLogin}
+            disabled={googleLoading}
+            className="w-full flex items-center justify-center gap-2 bg-white text-gray-700 font-medium py-3 rounded-xl hover:bg-gray-100 transition disabled:opacity-50"
+          >
+            <FcGoogle size={20} />
+            {googleLoading ? 'Redirecting...' : 'Sign in with Google'}
+          </button>
+          <p className="text-center text-white/50 text-xs mt-2">Only for existing Google accounts</p>
 
           <p className="text-center text-white/70 text-sm mt-6">
             Don't have an account?{' '}

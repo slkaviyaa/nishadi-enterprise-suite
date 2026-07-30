@@ -72,6 +72,14 @@ export default function Inventory() {
 
   const handleFileSelect = (e) => setSelectedFile(e.target.files[0])
 
+  // Helper: Map Excel columns to expected keys
+  const getColumnValue = (row, possibleNames) => {
+    for (const name of possibleNames) {
+      if (row[name] !== undefined) return row[name]
+    }
+    return null
+  }
+
   const handleImport = async () => {
     if (!selectedFile) return alert('Select an Excel file')
     setImporting(true)
@@ -81,34 +89,96 @@ export default function Inventory() {
       const wb = XLSX.read(evt.target.result, { type: 'binary' })
       const ws = wb.Sheets[wb.SheetNames[0]]
       const rows = XLSX.utils.sheet_to_json(ws)
+
+      // Debug: show column names
+      if (rows.length > 0) {
+        console.log('Excel columns detected:', Object.keys(rows[0]))
+      }
+
+      let importedCount = 0
       for (const row of rows) {
         try {
-          const sku = row['Item_SKU'] || row['Item_Name'].replace(/\s/g, '_')
-          const { data: prod } = await supabase.from('products').upsert({ sku, name: row['Item_Name'], category: row['Category'], barcode: row['Item_Barcode'] || null }, { onConflict: 'sku' }).select('id').single()
+          // Flexible name mapping (Item_Name, Name, Product Name, item name, etc.)
+          const itemName = getColumnValue(row, ['Item_Name', 'Name', 'Product Name', 'ProductName', 'item name', 'Item Name'])
+          if (!itemName) {
+            console.warn('Skipping row - no product name found:', row)
+            continue
+          }
+
+          const itemSKU = getColumnValue(row, ['Item_SKU', 'SKU', 'sku', 'Item Code']) 
+            || itemName.replace(/\s+/g, '_').toUpperCase()
+
+          const category = getColumnValue(row, ['Category', 'category', 'Product Category']) || null
+          const barcode = getColumnValue(row, ['Item_Barcode', 'Barcode', 'barcode']) || null
+
+          // Upsert product
+          const { data: prod } = await supabase.from('products')
+            .upsert({ 
+              sku: itemSKU, 
+              name: itemName, 
+              category, 
+              barcode 
+            }, { onConflict: 'sku' })
+            .select('id')
+            .single()
           if (!prod) continue
+
+          // Variant handling (optional)
+          const subItemName = getColumnValue(row, ['SubItem_Name', 'Variant Name', 'SubItem Name'])
           let variantId = null
-          if (row['SubItem_Name']) {
-            const { data: variant } = await supabase.from('product_variants').upsert({ product_id: prod.id, variant_name: 'SubItem', variant_value: row['SubItem_Name'], barcode: row['SubItem_barcode'] || null, sku: row['SubItem_SKU'] || null }, { onConflict: 'product_id, variant_name, variant_value' }).select('id').single()
+          if (subItemName) {
+            const { data: variant } = await supabase.from('product_variants')
+              .upsert({
+                product_id: prod.id,
+                variant_name: 'SubItem',
+                variant_value: subItemName,
+                barcode: getColumnValue(row, ['SubItem_barcode', 'Variant Barcode']) || null,
+                sku: getColumnValue(row, ['SubItem_SKU', 'Variant SKU']) || null
+              }, { onConflict: 'product_id, variant_name, variant_value' })
+              .select('id')
+              .single()
             variantId = variant?.id
           }
-          const price = Number(row['Selling_Price_SubItem']) || 0
-          const cost = Number(row['Cost_Price_SubItem']) || 0
-          const stock = Number(row['Stock_Count_SubItem']) || 0
-          const query = supabase.from('branch_products').select('id').eq('branch_id', branch).eq('product_id', prod.id)
+
+          // Price & Stock
+          const price = Number(getColumnValue(row, ['Selling_Price_SubItem', 'Price', 'Selling Price', 'Sell Price']) || 0)
+          const cost = Number(getColumnValue(row, ['Cost_Price_SubItem', 'Cost', 'Cost Price', 'Purchase Price']) || 0)
+          const stock = Number(getColumnValue(row, ['Stock_Count_SubItem', 'Stock', 'Quantity', 'Qty']) || 0)
+
+          // Upsert branch_products
+          const query = supabase.from('branch_products')
+            .select('id')
+            .eq('branch_id', branch)
+            .eq('product_id', prod.id)
+
           if (variantId) query.eq('variant_id', variantId)
           else query.is('variant_id', null)
+
           const { data: existing } = await query.maybeSingle()
-          if (existing) { await supabase.from('branch_products').update({ price, cost_price: cost, stock_quantity: stock }).eq('id', existing.id) }
-          else { await supabase.from('branch_products').insert({ branch_id: branch, product_id: prod.id, variant_id: variantId, price, cost_price: cost, stock_quantity: stock, is_active: true }) }
-        } catch (err) { console.warn('Row failed:', row['Item_Name'], err) }
+
+          if (existing) {
+            await supabase.from('branch_products')
+              .update({ price, cost_price: cost, stock_quantity: stock })
+              .eq('id', existing.id)
+          } else {
+            await supabase.from('branch_products')
+              .insert({ branch_id: branch, product_id: prod.id, variant_id: variantId, price, cost_price: cost, stock_quantity: stock, is_active: true })
+          }
+          importedCount++
+        } catch (err) {
+          console.warn('Row failed:', row, err)
+        }
       }
-      setMessage('✅ Import completed!')
+      setMessage(`✅ Import completed! ${importedCount} products updated.`)
       setImporting(false)
       setSelectedFile(null)
       loadItems()
     }
     reader.readAsBinaryString(selectedFile)
   }
+
+  // ... ඉතිරි කොටස් (edit, delete, export, stock movement) නොවෙනස්ව පවතී ...
+  // (පහත ඒවා copy කරන්න, නැත්නම් ඉහත code block එක පමණක් replace කරන්න)
 
   const handleDelete = async (id) => { if (confirm('Delete this product?')) { await supabase.from('branch_products').update({ is_active: false }).eq('id', id); loadItems() } }
 
@@ -127,7 +197,6 @@ export default function Inventory() {
     XLSX.writeFile(wb, `inventory_${new Date().toISOString().split('T')[0]}.xlsx`)
   }
 
-  // Stock movement report – only items with movement, product_id fix
   const loadMovement = async () => {
     if (!fromDate || !toDate) return
     const { data: products } = await supabase

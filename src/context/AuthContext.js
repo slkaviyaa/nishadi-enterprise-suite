@@ -20,38 +20,61 @@ export function AuthProvider({ children }) {
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
       setSession(data.session)
-      if (data.session) loadStaff(data.session.user.id)
+      if (data.session) loadUser(data.session.user.id)
       else setLoading(false)
     })
     const { data: listener } = supabase.auth.onAuthStateChange((_e, session) => {
       setSession(session)
-      if (session) loadStaff(session.user.id)
+      if (session) loadUser(session.user.id)
       else { setBranch(null); setUser(null); setLoading(false) }
     })
     return () => listener.subscription.unsubscribe()
   }, [])
 
-  const loadStaff = async (userId) => {
-    // Use RPC function (bypasses PostgREST 406)
-    const { data, error } = await supabase.rpc('get_staff_by_id', { user_id: userId })
-    if (error) {
-      console.error('Staff load error:', error)
+  const loadUser = async (userId) => {
+    const { data: staff } = await supabase.from('staff')
+      .select('id, branch_id, username')
+      .eq('id', userId)
+      .maybeSingle()
+    if (staff) {
+      setUser(staff)
+      setBranch(staff.branch_id)
       setLoading(false)
       return
     }
-    if (data && data.length > 0) {
-      setBranch(data[0].branch_id)
-      setUser(data[0])
+
+    const { data: profile } = await supabase.from('profiles')
+      .select('id, branch_id, display_name')
+      .eq('id', userId)
+      .maybeSingle()
+    if (profile) {
+      setUser(profile)
+      setBranch(profile.branch_id)
+    } else {
+      setUser(null)
+      setBranch(null)
     }
     setLoading(false)
   }
 
-  if (loading) return <div className="flex h-screen items-center justify-center text-2xl">Loading...</div>
+  const signInWithGoogle = async (inviteCode = null) => {
+    let redirectTo = `${window.location.origin}/auth/callback`
+    if (inviteCode) redirectTo += `?invite_code=${encodeURIComponent(inviteCode)}`
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: { redirectTo },
+    })
+    if (error) throw error
+  }
+
+  const signOut = () => supabase.auth.signOut()
+
+  if (loading) return <div className="flex h-screen items-center justify-center">Loading...</div>
 
   if (session) {
     if (!branch) return <div className="alert alert-error m-4">No branch assigned. Contact admin.</div>
     return (
-      <AuthContext.Provider value={{ branch, user }}>
+      <AuthContext.Provider value={{ branch, user, signInWithGoogle, signOut }}>
         <MainLayout>{children}</MainLayout>
       </AuthContext.Provider>
     )
@@ -59,7 +82,7 @@ export function AuthProvider({ children }) {
 
   if (isPublic) {
     return (
-      <AuthContext.Provider value={{ branch: null, user: null }}>
+      <AuthContext.Provider value={{ branch: null, user: null, signInWithGoogle, signOut }}>
         {pathname === '/' ? <Login /> : children}
       </AuthContext.Provider>
     )

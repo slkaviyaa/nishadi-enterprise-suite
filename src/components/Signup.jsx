@@ -1,6 +1,8 @@
 'use client'
 import { useState } from 'react'
 import Link from 'next/link'
+import { useAuth } from '../context/AuthContext'
+import { FcGoogle } from 'react-icons/fc'
 
 export default function Signup() {
   const [email, setEmail] = useState('')
@@ -11,12 +13,14 @@ export default function Signup() {
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
 
-  const handleSignup = async (e) => {
+  const auth = useAuth()
+  const signInWithGoogle = auth?.signInWithGoogle
+
+  const handleEmailSignup = async (e) => {
     e.preventDefault()
     setLoading(true)
     setError('')
     setMessage('')
-
     try {
       const res = await fetch('/api/signup', {
         method: 'POST',
@@ -33,15 +37,35 @@ export default function Signup() {
         setError(data.error)
       } else {
         setMessage('Account created! You can now sign in.')
-        setEmail('')
-        setPassword('')
-        setDisplayName('')
-        setInviteCode('')
+        setEmail(''); setPassword(''); setDisplayName(''); setInviteCode('')
       }
     } catch (err) {
       setError('Network error. Please try again.')
     }
     setLoading(false)
+  }
+
+  const handleGoogleSignup = async () => {
+    if (!inviteCode.trim()) {
+      setError('Invite code is required for Google signup')
+      return
+    }
+    try {
+      const res = await fetch('/api/verify-invite', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: inviteCode.trim() })
+      })
+      const { valid, error: inviteError } = await res.json()
+      if (!valid) {
+        setError(inviteError || 'Invalid invite code')
+        return
+      }
+      setError('')
+      await signInWithGoogle(inviteCode.trim())
+    } catch (err) {
+      setError('Something went wrong')
+    }
   }
 
   return (
@@ -61,33 +85,45 @@ export default function Signup() {
             <div className="w-20 h-20 bg-white/20 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg">
               <span className="text-4xl">🚛</span>
             </div>
-            <h1 className="text-3xl font-bold text-white">Create Owner Account</h1>
+            <h1 className="text-3xl font-bold text-white">Create Account</h1>
             <p className="text-white/70 mt-1">Nishadi Motors POS</p>
           </div>
 
-          {error && (
-            <div className="bg-red-500/20 border border-red-400/30 text-white px-4 py-3 rounded-xl mb-4 text-sm">{error}</div>
-          )}
-          {message && (
-            <div className="bg-green-500/20 border border-green-400/30 text-white px-4 py-3 rounded-xl mb-4 text-sm">
-              {message} <Link href="/" className="font-bold underline">Go to Sign In</Link>
-            </div>
-          )}
+          {error && <div className="bg-red-500/20 border border-red-400/30 text-white px-4 py-3 rounded-xl mb-4 text-sm">{error}</div>}
+          {message && <div className="bg-green-500/20 border border-green-400/30 text-white px-4 py-3 rounded-xl mb-4 text-sm">
+            {message} <Link href="/" className="font-bold underline">Go to Sign In</Link>
+          </div>}
 
-          <form onSubmit={handleSignup} className="space-y-4">
-            <input type="text" placeholder="Display Name" className="w-full bg-white/10 border border-white/20 rounded-xl px-4 py-3 text-white placeholder-white/60 focus:outline-none focus:border-white/50 transition"
-              value={displayName} onChange={e => setDisplayName(e.target.value)} required />
-            <input type="email" placeholder="Email address" className="w-full bg-white/10 border border-white/20 rounded-xl px-4 py-3 text-white placeholder-white/60 focus:outline-none focus:border-white/50 transition"
-              value={email} onChange={e => setEmail(e.target.value)} required />
-            <input type="password" placeholder="Password" className="w-full bg-white/10 border border-white/20 rounded-xl px-4 py-3 text-white placeholder-white/60 focus:outline-none focus:border-white/50 transition"
-              value={password} onChange={e => setPassword(e.target.value)} required />
+          <div className="space-y-4">
             <input type="text" placeholder="Invite Code (Security Key)" className="w-full bg-white/10 border border-white/20 rounded-xl px-4 py-3 text-white placeholder-white/60 focus:outline-none focus:border-white/50 transition"
               value={inviteCode} onChange={e => setInviteCode(e.target.value)} required />
-            <button type="submit" disabled={loading}
-              className="w-full bg-white text-purple-700 font-bold py-3 rounded-xl hover:bg-gray-100 transition disabled:opacity-50">
-              {loading ? 'Creating...' : 'Create Owner Account'}
+
+            <form onSubmit={handleEmailSignup} className="space-y-4">
+              <input type="text" placeholder="Display Name" className="w-full bg-white/10 border border-white/20 rounded-xl px-4 py-3 text-white placeholder-white/60 focus:outline-none focus:border-white/50 transition"
+                value={displayName} onChange={e => setDisplayName(e.target.value)} required />
+              <input type="email" placeholder="Email address" className="w-full bg-white/10 border border-white/20 rounded-xl px-4 py-3 text-white placeholder-white/60 focus:outline-none focus:border-white/50 transition"
+                value={email} onChange={e => setEmail(e.target.value)} required />
+              <input type="password" placeholder="Password" className="w-full bg-white/10 border border-white/20 rounded-xl px-4 py-3 text-white placeholder-white/60 focus:outline-none focus:border-white/50 transition"
+                value={password} onChange={e => setPassword(e.target.value)} required />
+              <button type="submit" disabled={loading}
+                className="w-full bg-white text-purple-700 font-bold py-3 rounded-xl hover:bg-gray-100 transition disabled:opacity-50">
+                {loading ? 'Creating...' : 'Sign up with Email'}
+              </button>
+            </form>
+
+            <div className="flex items-center my-4">
+              <div className="flex-1 border-t border-white/20"></div>
+              <span className="px-3 text-white/60 text-sm">OR</span>
+              <div className="flex-1 border-t border-white/20"></div>
+            </div>
+
+            <button onClick={handleGoogleSignup}
+              className="w-full flex items-center justify-center gap-2 bg-white text-gray-700 font-medium py-3 rounded-xl hover:bg-gray-100 transition">
+              <FcGoogle size={20} />
+              Sign up with Google
             </button>
-          </form>
+            <p className="text-center text-white/50 text-xs">Google signup requires an invite code</p>
+          </div>
 
           <p className="text-center text-white/70 text-sm mt-4">
             Already have an account?{' '}
