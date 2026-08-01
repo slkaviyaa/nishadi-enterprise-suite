@@ -1,5 +1,6 @@
 'use client'
-import { useState } from 'react'
+
+import React, { useState } from 'react'
 import Link from 'next/link'
 import { useAuth } from '../context/AuthContext'
 import { FcGoogle } from 'react-icons/fc'
@@ -62,6 +63,7 @@ export default function Signup() {
         return
       }
       setError('')
+      // Pass invite_code to signInWithGoogle so callback route can map the branch/profile
       await signInWithGoogle(inviteCode.trim())
     } catch (err) {
       setError('Something went wrong')
@@ -80,7 +82,7 @@ export default function Signup() {
           ← Back to Login
         </Link>
 
-        <div className="bg-white/10 backdrop-blur-xl border border-white/20 rounded-3xl shadow-2xl p-8 animate-bounceIn">
+        <div className="bg-white/10 backdrop-blur-xl border border-white/20 rounded-3xl shadow-2xl p-8">
           <div className="text-center mb-6">
             <div className="w-20 h-20 bg-white/20 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg">
               <span className="text-4xl">🚛</span>

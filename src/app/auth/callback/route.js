@@ -5,6 +5,7 @@ import { NextResponse } from 'next/server'
 export async function GET(request) {
   const requestUrl = new URL(request.url)
   const code = requestUrl.searchParams.get('code')
+  const inviteCode = requestUrl.searchParams.get('invite_code')
 
   if (!code) {
     return NextResponse.redirect(`${requestUrl.origin}/login?error=no_code`)
@@ -16,33 +17,53 @@ export async function GET(request) {
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
     {
       cookies: {
-        get(name) { 
-          return cookieStore.get(name)?.value 
-        },
+        get(name) { return cookieStore.get(name)?.value },
         set(name, value, options) { 
-          try {
-            cookieStore.set({ name, value, ...options }) 
-          } catch (error) {
-            // Handle cookie setting error
-          }
+          try { cookieStore.set({ name, value, ...options }) } catch {} 
         },
         remove(name, options) { 
-          try {
-            cookieStore.set({ name, value: '', ...options }) 
-          } catch (error) {
-            // Handle cookie removal error
-          }
+          try { cookieStore.set({ name, value: '', ...options }) } catch {} 
         },
       },
     }
   )
 
-  const { error } = await supabase.auth.exchangeCodeForSession(code)
+  const { data: { session }, error } = await supabase.auth.exchangeCodeForSession(code)
   
-  if (error) {
+  if (error || !session) {
     return NextResponse.redirect(`${requestUrl.origin}/login?error=auth_failed`)
   }
 
-  // Success unama root path ekata (dashboard/home) redirect karai
+  // If Google signup was initiated with an invite code, verify and map the profile
+  if (session.user && inviteCode) {
+    try {
+      const res = await fetch(`${requestUrl.origin}/api/verify-invite`, {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'Cookie': request.headers.get('cookie') || '' 
+        },
+        body: JSON.stringify({ code: inviteCode }),
+      })
+      const data = await res.json()
+      
+      if (data.valid && data.branch_id) {
+        const { createClient } = await import('@supabase/supabase-js')
+        const adminClient = createClient(
+          process.env.NEXT_PUBLIC_SUPABASE_URL,
+          process.env.SUPABASE_SERVICE_ROLE_KEY,
+          { auth: { autoRefreshToken: false } }
+        )
+        await adminClient.from('profiles').upsert({
+          id: session.user.id,
+          branch_id: data.branch_id,
+          display_name: session.user.user_metadata?.full_name || '',
+        })
+      }
+    } catch (err) {
+      console.error('Google signup invite mapping error:', err)
+    }
+  }
+
   return NextResponse.redirect(`${requestUrl.origin}/`)
 }
