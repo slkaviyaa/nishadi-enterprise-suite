@@ -7,8 +7,6 @@ import { useToast } from '../context/ToastContext'
 import { Html5Qrcode } from 'html5-qrcode'
 import { BsUpcScan, BsWhatsapp } from 'react-icons/bs'
 import { FiEdit3, FiTrash2, FiPlus, FiMinus, FiX, FiUserCheck, FiUpload, FiBluetooth } from 'react-icons/fi'
-import { Camera } from '@capacitor/camera'
-import { Contacts } from '@capacitor/contacts'
 import { jsPDF } from 'jspdf'
 
 const PARALLEL_BRANCH_ID = '22222222-2222-2222-2222-222222222222';
@@ -43,11 +41,8 @@ export default function POS() {
   const [lastBill, setLastBill] = useState(null)
   const iframeRef = useRef(null)
 
-  // BLUETOOTH PRINTER STATES
-  const [btModalOpen, setBtModalOpen] = useState(false)
-  const [btDevices, setBtDevices] = useState([])
   const [isPrinting, setIsPrinting] = useState(false)
-  const [printerSize, setPrinterSize] = useState(32) // 32 chars for 58mm, 48 chars for 80mm
+  const [printerSize, setPrinterSize] = useState(32)
 
   const [selectedCartItem, setSelectedCartItem] = useState(null)
   const [editModalOpen, setEditModalOpen] = useState(false)
@@ -77,25 +72,34 @@ export default function POS() {
     return () => window.removeEventListener('resize', checkMobile)
   }, [])
 
-  useEffect(() => {
-    if (!branch) return
-    supabase.from('branch_products')
+  // 🔴 FIXED: Live Stock Refresh සඳහා වෙනම Function එකක්
+  const fetchProducts = async () => {
+    if (!branch) return;
+    const { data, error } = await supabase.from('branch_products')
       .select('id, price, stock_quantity, products(sku, name, prevent_out_of_stock_sale, auto_update_stock)')
       .eq('branch_id', branch)
-      .then(({ data, error }) => {
-        if (error) { showToast('Failed to load products', 'error'); return }
-        if (data) setProducts(data.map(p => ({
-          id: p.id, sku: p.products?.sku, name: p.products?.name,
-          price: p.price, stock: p.stock_quantity,
-          preventOutOfStock: p.products?.prevent_out_of_stock_sale ?? false,
-          autoUpdateStock: p.products?.auto_update_stock ?? true
-        })))
-      })
-    supabase.from('customers').select('*').eq('branch_id', branch).then(({ data }) => setCustomers(data || []))
-    supabase.from('orders').select('id, total, hold_note, created_at')
-      .eq('branch_id', branch).eq('status', 'hold')
-      .order('created_at', { ascending: false })
-      .then(({ data }) => setHoldOrders(data || []))
+      
+    if (error) { showToast('Failed to load products', 'error'); return; }
+    if (data) {
+      setProducts(data.map(p => ({
+        id: p.id, sku: p.products?.sku, name: p.products?.name,
+        price: p.price, stock: p.stock_quantity,
+        preventOutOfStock: p.products?.prevent_out_of_stock_sale ?? false,
+        autoUpdateStock: p.products?.auto_update_stock ?? true
+      })))
+    }
+  }
+
+  useEffect(() => {
+    fetchProducts();
+    
+    if (branch) {
+      supabase.from('customers').select('*').eq('branch_id', branch).then(({ data }) => setCustomers(data || []))
+      supabase.from('orders').select('id, total, hold_note, created_at')
+        .eq('branch_id', branch).eq('status', 'hold')
+        .order('created_at', { ascending: false })
+        .then(({ data }) => setHoldOrders(data || []))
+    }
   }, [branch])
 
   useEffect(() => {
@@ -108,33 +112,13 @@ export default function POS() {
     return () => document.removeEventListener('mousedown', handler)
   }, [])
 
-  const ensurePermission = async (type) => {
-    if (typeof window === 'undefined' || !window.Capacitor || !window.Capacitor.isNativePlatform()) return true;
-    try {
-      if (type === 'camera') {
-        let status = await Camera.checkPermissions();
-        if (status.camera === 'granted') return true;
-        status = await Camera.requestPermissions();
-        if (status.camera === 'granted') return true;
-        alert('⚠️ Camera Permission ලබා දී නැත!\n\nකරුණාකර Phone Settings -> Apps -> Nishadi Enterprise -> Permissions වෙත ගොස් Camera "Allow" කරන්න.');
-        return false;
-      }
-      if (type === 'contacts') {
-        let status = await Contacts.checkPermissions();
-        if (status.contacts === 'granted') return true;
-        status = await Contacts.requestPermissions();
-        if (status.contacts === 'granted') return true;
-        alert('⚠️ Contacts Permission ලබා දී නැත!\n\nකරුණාකර Phone Settings -> Apps -> Nishadi Enterprise -> Permissions වෙත ගොස් Contacts "Allow" කරන්න.');
-        return false;
-      }
-    } catch (error) { console.error(`Permission Error (${type}):`, error); return false; }
-  };
-
   const updateCartQty = (id, newQty) => {
     if (newQty < 1) return
     const item = cart.find(i => i.id === id)
-    if (item && item.preventOutOfStock && newQty > item.stock) {
-      showToast(`Cannot set quantity to ${newQty}. Stock limit is ${item.stock}!`, 'error')
+    const product = products.find(p => p.id === id)
+    
+    if (item && item.preventOutOfStock && newQty > product.stock) {
+      showToast(`ඔබට ${newQty} ක් ලබාදිය නොහැක. දැනට ඇත්තේ ${product.stock} යි!`, 'error')
       return
     }
     setCart(prev => prev.map(item => item.id === id ? { ...item, qty: newQty } : item))
@@ -143,8 +127,9 @@ export default function POS() {
   const addToCart = (prod) => {
     const exist = cart.find(i => i.id === prod.id)
     const currentCartQty = exist ? exist.qty : 0
+    
     if (prod.preventOutOfStock && currentCartQty + 1 > prod.stock) {
-      showToast(`⚠️ Cannot add "${prod.name}". Out of stock!`, 'error')
+      showToast(`⚠️ "${prod.name}" තොග අවසන්! (Available: ${prod.stock})`, 'error')
       return
     }
     setCart(prev => {
@@ -165,8 +150,10 @@ export default function POS() {
 
   const handleUpdateCartItem = () => {
     if (!selectedCartItem) return
-    if (selectedCartItem.preventOutOfStock && editQty > selectedCartItem.stock) {
-      showToast(`⚠️ Quantity exceeds stock limit`, 'error')
+    const product = products.find(p => p.id === selectedCartItem.id)
+    
+    if (selectedCartItem.preventOutOfStock && editQty > product.stock) {
+      showToast(`⚠️ ප්‍රමාණය තොගයට වඩා වැඩියි. (ඇත්තේ ${product.stock} යි)`, 'error')
       return
     }
     setCart(prev => prev.map(item => {
@@ -214,21 +201,37 @@ export default function POS() {
   }
 
   const pickContact = async () => {
-    const hasPermission = await ensurePermission('contacts');
-    if (!hasPermission) { setCustomerModal(true); return; }
-    try {
-      const result = await Contacts.pickContact()
-      if (result && result.contact) {
-        const name = result.contact.name || ''
-        const phone = result.contact.phoneNumbers?.[0]?.number || result.contact.telephone || ''
-        const cleanPhone = phone.replace(/[^\d+]/g, '')
-        if (cleanPhone) {
-          const cust = customers.find(c => c.phone === cleanPhone || (c.phone && c.phone.endsWith(cleanPhone.slice(-9))))
-          if (cust) selectCustomerFromSearch(cust)
-          else { setCustomerPhone(cleanPhone); setNewCustName(name || 'Cust'); setNewCustomerForm(true) }
+    if ('contacts' in navigator && 'ContactsManager' in window) {
+      try {
+        const props = ['name', 'tel'];
+        const opts = { multiple: false };
+        const contacts = await navigator.contacts.select(props, opts);
+        
+        if (contacts && contacts.length > 0) {
+          const contact = contacts[0];
+          const name = contact.name ? contact.name[0] : 'Cust';
+          const phone = contact.tel ? contact.tel[0].replace(/[^\d+]/g, '') : '';
+          
+          if (phone) {
+            const cust = customers.find(c => c.phone === phone || (c.phone && c.phone.endsWith(phone.slice(-9))));
+            if (cust) {
+              selectCustomerFromSearch(cust);
+            } else { 
+              setCustomerPhone(phone); 
+              setNewCustName(name); 
+              setNewCustomerForm(true); 
+            }
+          } else {
+            showToast('තෝරාගත් Contact එකෙහි දුරකථන අංකයක් නොමැත!', 'error');
+          }
         }
+      } catch (err) {
+        console.error(err);
+        setCustomerModal(true);
       }
-    } catch (err) { setCustomerModal(true) }
+    } else {
+      setCustomerModal(true);
+    }
   }
 
   const handleVcfUpload = (e) => {
@@ -253,28 +256,53 @@ export default function POS() {
 
   const checkout = async (status = 'completed') => {
     if (cart.length === 0) return
+    
+    // Live Database Stock Check Before Checkout
+    for (const item of cart) {
+      if (item.preventOutOfStock) {
+        const { data: bp } = await supabase.from('branch_products').select('stock_quantity').eq('id', item.id).single()
+        if (!bp || bp.stock_quantity < item.qty) { showToast(`අවවාදයයි: ${item.name} සඳහා ප්‍රමාණවත් තොග නොමැත!`, 'error'); return }
+      }
+    }
+
     let cid = selectedCustomer?.id
     if (!cid && customerPhone) {
       const { data: nc } = await supabase.from('customers').insert({ branch_id: branch, phone: customerPhone, name: 'Cust ' + customerPhone.slice(-4) }).select().single()
       if (nc) { cid = nc.id; setCustomers(prev => [...prev, nc]); setSelectedCustomer(nc) }
     }
+    
     const { data: order, error: orderError } = await supabase.from('orders').insert({
       branch_id: branch, total: final, discount, status, customer_id: cid || null, payment_method: paymentMethod,
       cheque_number: paymentMethod === 'cheque' ? chequeNumber : null, cheque_date: paymentMethod === 'cheque' ? chequeDate : null,
       bank_reference: paymentMethod === 'bank_transfer' ? bankReference : null
     }).select().single()
 
-    if (orderError) { showToast('Order failed', 'error'); return }
+    if (orderError) { showToast('Order failed: ' + orderError.message, 'error'); return }
+    
     if (order) {
       await supabase.from('order_items').insert(cart.map(i => ({ order_id: order.id, branch_product_id: i.id, quantity: i.qty, price: i.price })))
       for (const item of cart) { if (item.autoUpdateStock !== false) { await supabase.rpc('decrement_stock', { bp_id: item.id, qty: item.qty }) } }
       if (status === 'completed') { try { await supabase.rpc('create_parallel_order', { main_order_id: order.id, target_branch_id: PARALLEL_BRANCH_ID }); } catch (err) {} }
       
+      if (selectedCustomer && paymentMethod === 'credit' && status === 'completed') {
+        await supabase.from('credit_transactions').insert({
+          customer_id: selectedCustomer.id, branch_id: branch, amount: final, type: 'purchase',
+          due_date: creditDueDate || new Date(Date.now() + 30*24*60*60*1000).toISOString().split('T')[0], payment_mode: 'credit'
+        })
+        await supabase.from('customers').update({ total_credit: selectedCustomer.total_credit + final }).eq('id', selectedCustomer.id)
+      }
+
       setLastBill({ items: [...cart], total: final, paymentMethod, date: new Date().toLocaleString() })
-      
-      showToast('Bill Cut Successfully!')
+      if (status === 'hold') {
+        supabase.from('orders').select('id, total, hold_note, created_at').eq('branch_id', branch).eq('status', 'hold').order('created_at', { ascending: false }).then(({ data }) => setHoldOrders(data || []))
+      }
+
+      showToast('Bill Cut Successfully!', 'success')
       setCart([]); setDiscount(0); setSelectedCustomer(null); setCustomerPhone(''); setCustomerSearch('')
       setPaymentMethod('cash'); setChequeNumber(''); setChequeDate(''); setBankReference(''); setCreditDueDate('')
+      
+      // 🔴 REFRESH LIVE STOCK AFTER CHECKOUT
+      await fetchProducts();
     }
   }
 
@@ -289,8 +317,6 @@ export default function POS() {
   }
 
   const startScanner = async () => {
-    const hasPermission = await ensurePermission('camera');
-    if (!hasPermission) return;
     if (scanRef.current) { try { await scanRef.current.stop() } catch(e) {}; scanRef.current = null }
     const html5QrCode = new Html5Qrcode("reader")
     scanRef.current = html5QrCode
@@ -299,7 +325,11 @@ export default function POS() {
         (decodedText) => { const prod = products.find(p => p.sku === decodedText); if (prod) addToCart(prod); else showToast(`Not found: ${decodedText}`, 'error'); stopScanner() },
         () => {})
       setScanner(html5QrCode)
-    } catch (err) { setScanner(null) }
+    } catch (err) { 
+      console.error("Scanner Error: ", err);
+      showToast('කැමරාව ආරම්භ කිරීමට නොහැක. Browser එකෙන් අවසර දී ඇත්දැයි බලන්න.', 'error');
+      setScanner(null) 
+    }
   }
 
   const stopScanner = () => {
@@ -307,6 +337,7 @@ export default function POS() {
     setScanner(null)
   }
 
+  // 🔴 FIXED: NO API NEEDED. Uses Browser's Native Share functionality!
   const shareLastBill = async () => {
     if (!lastBill) return;
     try {
@@ -329,103 +360,121 @@ export default function POS() {
       doc.text('Designed & Developed by Ceylon Digi Solutions', 10, y);
 
       const pdfBlob = doc.output('blob');
-      const formData = new FormData();
-      formData.append('file', pdfBlob, `receipt_${Date.now()}.pdf`);
+      const fileName = `receipt_${Date.now()}.pdf`;
+      const file = new File([pdfBlob], fileName, { type: 'application/pdf' });
       
-      const uploadUrl = 'https://nishadi-enterprise-suite.vercel.app/api/upload-receipt';
-      const res = await fetch(uploadUrl, { method: 'POST', body: formData });
-      
-      if (!res.ok) throw new Error(`Upload Server Error: ${res.status}`);
-      const { publicUrl, error } = await res.json();
-      if (error) throw new Error(error);
-
-      const message = `*${billHeader}*\nDate: ${lastBill.date}\nTotal: ${currency}${lastBill.total.toFixed(2)}\nPayment: ${lastBill.paymentMethod}\n\nReceipt: ${publicUrl}`;
-      window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, '_blank');
-      showToast('Receipt link shared!');
-    } catch (err) { showToast(`PDF Error: ${err.message || 'Check Network'}`, 'error'); console.error(err); }
+      // Phone Native Share Dialog (Works seamlessly on Mobile Chrome/Safari)
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({
+          title: 'Nishadi Motors Receipt',
+          text: `*${billHeader}*\nDate: ${lastBill.date}\nTotal: ${currency}${lastBill.total.toFixed(2)}\nPayment: ${lastBill.paymentMethod}`,
+          files: [file]
+        });
+        showToast('Receipt shared successfully!', 'success');
+      } else {
+        // Fallback for Desktop/PC (Downloads the PDF and opens standard WhatsApp Web)
+        const pdfUrl = URL.createObjectURL(pdfBlob);
+        const a = document.createElement('a');
+        a.href = pdfUrl;
+        a.download = fileName;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        
+        const message = `*${billHeader}*\nDate: ${lastBill.date}\nTotal: ${currency}${lastBill.total.toFixed(2)}\nPayment: ${lastBill.paymentMethod}\n\n(Receipt has been downloaded to your device)`;
+        window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, '_blank');
+        showToast('Receipt downloaded!', 'success');
+      }
+    } catch (err) { 
+      showToast(`Share Error: ${err.message}`, 'error'); 
+      console.error(err); 
+    }
   }
 
-  // ==========================================
-  // 🖨️ UNIVERSAL BLUETOOTH THERMAL PRINTING
-  // ==========================================
-  const loadBluetoothDevices = () => {
-    if (typeof window === 'undefined' || !window.bluetoothSerial) {
-      showToast('Bluetooth Plugin එක හමු නොවුණි. Mobile App එකක්දැයි පරීක්ෂා කරන්න.', 'error');
+  const printViaWebBluetooth = async () => {
+    if (!lastBill) return;
+    if (!navigator.bluetooth) {
+      showToast('ඔබගේ Browser එක Web Bluetooth API සඳහා සහාය නොදක්වයි. කරුණාකර Google Chrome භාවිතා කරන්න.', 'error');
       return;
     }
-    window.bluetoothSerial.list(
-      (devices) => {
-        setBtDevices(devices);
-        setBtModalOpen(true);
-      },
-      (err) => {
-        showToast('Bluetooth උපාංග සෙවීමේ දෝෂයකි. Bluetooth ON දැයි පරීක්ෂා කරන්න.', 'error');
-        console.error(err);
-      }
-    );
-  };
-
-  const printViaBluetooth = (macAddress) => {
-    if (!lastBill || !window.bluetoothSerial) return;
     setIsPrinting(true);
+    try {
+      showToast('ප්‍රින්ටරය තෝරන්න...', 'info');
+      const device = await navigator.bluetooth.requestDevice({
+        acceptAllDevices: true,
+        optionalServices: ['000018f0-0000-1000-8000-00805f9b34fb', 'e7810a71-73ae-499d-8c15-faa9aef0c3f2']
+      });
 
-    const items = lastBill.items;
-    const tot = lastBill.total;
-    
-    // UNIVERSAL ESC/POS Commands
-    const ESC = "\x1B";
-    const CENTER = ESC + "\x61\x01";
-    const LEFT = ESC + "\x61\x00";
-    const BOLD_ON = ESC + "\x45\x01";
-    const BOLD_OFF = ESC + "\x45\x00";
-    
-    // Dynamic Line Generation based on selected printer size
-    const LINE = "-".repeat(printerSize) + "\n";
-
-    let textToPrint = "";
-    textToPrint += CENTER + BOLD_ON + billHeader + "\n" + BOLD_OFF;
-    textToPrint += lastBill.date + "\n";
-    textToPrint += LINE + LEFT;
-    
-    // Dynamic column width calculations
-    const qtyWidth = 4;
-    const priceWidth = 10;
-    const nameWidth = printerSize - qtyWidth - priceWidth; 
-
-    items.forEach(i => {
-      let name = i.name.substring(0, nameWidth - 1).padEnd(nameWidth, ' ');
-      let qty = (i.qty + "x").padEnd(qtyWidth, ' ');
-      let price = (i.price * i.qty).toFixed(2).padStart(priceWidth, ' ');
-      textToPrint += `${name}${qty}${price}\n`;
-    });
-    
-    textToPrint += LINE;
-    textToPrint += `Subtotal: `.padEnd(printerSize - priceWidth, ' ') + `${subtotal.toFixed(2).padStart(priceWidth, ' ')}\n`;
-    if (discount > 0) textToPrint += `Discount: `.padEnd(printerSize - priceWidth, ' ') + `-${discount.toFixed(2).padStart(priceWidth - 1, ' ')}\n`;
-    textToPrint += BOLD_ON + `Total: `.padEnd(printerSize - priceWidth, ' ') + `${tot.toFixed(2).padStart(priceWidth, ' ')}\n` + BOLD_OFF;
-    textToPrint += CENTER + `\nPayment: ${lastBill.paymentMethod}\n`;
-    textToPrint += "\n" + billFooter + "\n\n\n\n"; // Added extra newlines to push paper out
-
-    window.bluetoothSerial.connect(macAddress, 
-      () => {
-        window.bluetoothSerial.write(textToPrint, 
-          () => {
-            showToast('Printed Successfully!', 'success');
-            setTimeout(() => window.bluetoothSerial.disconnect(), 1000);
-            setIsPrinting(false);
-            setBtModalOpen(false);
-          },
-          (err) => {
-            showToast('Print failed.', 'error');
-            setIsPrinting(false);
+      const server = await device.gatt.connect();
+      let service, characteristic;
+      const services = await server.getPrimaryServices();
+      
+      for (const srv of services) {
+        const characteristics = await srv.getCharacteristics();
+        for (const char of characteristics) {
+          if (char.properties.write || char.properties.writeWithoutResponse) {
+            service = srv;
+            characteristic = char;
+            break;
           }
-        );
-      },
-      (err) => {
-        showToast('Printer Connection Failed. Make sure it is paired and ON.', 'error');
-        setIsPrinting(false);
+        }
+        if (characteristic) break;
       }
-    );
+
+      if (!characteristic) {
+        throw new Error('ප්‍රින්ටරයේ අදාළ සේවාව (Characteristic) සොයාගත නොහැක.');
+      }
+
+      const items = lastBill.items;
+      const tot = lastBill.total;
+      const ESC = "\x1B";
+      const CENTER = ESC + "\x61\x01";
+      const LEFT = ESC + "\x61\x00";
+      const BOLD_ON = ESC + "\x45\x01";
+      const BOLD_OFF = ESC + "\x45\x00";
+      const LINE = "-".repeat(printerSize) + "\n";
+
+      let textToPrint = "";
+      textToPrint += CENTER + BOLD_ON + billHeader + "\n" + BOLD_OFF;
+      textToPrint += lastBill.date + "\n";
+      textToPrint += LINE + LEFT;
+      
+      const qtyWidth = 4;
+      const priceWidth = 10;
+      const nameWidth = printerSize - qtyWidth - priceWidth; 
+
+      items.forEach(i => {
+        let name = i.name.substring(0, nameWidth - 1).padEnd(nameWidth, ' ');
+        let qty = (i.qty + "x").padEnd(qtyWidth, ' ');
+        let price = (i.price * i.qty).toFixed(2).padStart(priceWidth, ' ');
+        textToPrint += `${name}${qty}${price}\n`;
+      });
+      
+      textToPrint += LINE;
+      textToPrint += `Subtotal: `.padEnd(printerSize - priceWidth, ' ') + `${subtotal.toFixed(2).padStart(priceWidth, ' ')}\n`;
+      if (discount > 0) textToPrint += `Discount: `.padEnd(printerSize - priceWidth, ' ') + `-${discount.toFixed(2).padStart(priceWidth - 1, ' ')}\n`;
+      textToPrint += BOLD_ON + `Total: `.padEnd(printerSize - priceWidth, ' ') + `${tot.toFixed(2).padStart(priceWidth, ' ')}\n` + BOLD_OFF;
+      textToPrint += CENTER + `\nPayment: ${lastBill.paymentMethod}\n`;
+      textToPrint += "\n" + billFooter + "\n\n\n\n";
+
+      const encoder = new TextEncoder();
+      const data = encoder.encode(textToPrint);
+      
+      const CHUNK_SIZE = 512;
+      for (let i = 0; i < data.length; i += CHUNK_SIZE) {
+        const chunk = data.slice(i, i + CHUNK_SIZE);
+        await characteristic.writeValue(chunk);
+      }
+
+      showToast('Printed Successfully!', 'success');
+      setTimeout(() => device.gatt.disconnect(), 1000);
+
+    } catch (error) {
+      console.error(error);
+      showToast('Print failed or user cancelled. Please make sure printer is ON and paired.', 'error');
+    } finally {
+      setIsPrinting(false);
+    }
   };
 
   const productPanel = (
@@ -443,16 +492,36 @@ export default function POS() {
           {products.filter(p => p.name?.toLowerCase().includes(search.toLowerCase())).map(p => {
             const cartItem = cart.find(i => i.id === p.id)
             const inCartQty = cartItem ? cartItem.qty : 0
-            const isOutOfStock = p.stock <= 0
+            
+            // 🔴 FIXED: Live Stock Calculation
+            const currentLiveStock = p.stock - inCartQty
+            const isOutOfStock = currentLiveStock <= 0
+
             return (
               <button key={p.id} className={`relative p-3 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition text-left shadow-sm ${inCartQty > 0 ? 'ring-2 ring-blue-500 bg-blue-50 dark:bg-gray-700' : ''} ${isOutOfStock && p.preventOutOfStock ? 'opacity-60 cursor-not-allowed' : ''}`} onClick={() => addToCart(p)}>
                 {inCartQty > 0 && <span className="absolute top-2 right-2 bg-blue-600 text-white font-extrabold text-xs px-2 py-0.5 rounded-full shadow-md">x {inCartQty}</span>}
                 {isOutOfStock && <span className={`absolute top-2 left-2 text-white text-[10px] font-bold px-1.5 py-0.5 rounded shadow ${p.preventOutOfStock ? 'bg-red-600' : 'bg-orange-500'}`}>Out of Stock</span>}
                 <div className="font-semibold text-sm sm:text-base mt-2 line-clamp-2">{p.name}</div>
-                <div className="text-xs sm:text-sm opacity-70 mt-1">{currency}{p.price} | Stock: {p.stock}</div>
+                <div className="text-xs sm:text-sm opacity-70 mt-1">{currency}{p.price} | Live Stock: <span className={isOutOfStock ? "text-red-500 font-bold" : "font-bold text-blue-600"}>{currentLiveStock}</span></div>
               </button>
             )
           })}
+        </div>
+      )}
+      {holdOrders.length > 0 && (
+        <div className="bg-gray-100 dark:bg-gray-800 rounded-lg p-3 mt-2">
+          <h4 className="font-medium text-sm mb-2">📌 Hold Orders ({holdOrders.length})</h4>
+          <div className="space-y-2 max-h-40 overflow-y-auto">
+            {holdOrders.map(o => (
+              <div key={o.id} className="flex items-center justify-between bg-white dark:bg-gray-700 p-2 rounded text-sm">
+                <div><span className="font-semibold">#{o.id.slice(0,6)}</span><span className="ml-2">{currency}{o.total}</span>{o.hold_note && <span className="ml-2 text-xs opacity-70">({o.hold_note})</span>}</div>
+                <div className="flex gap-1">
+                  <button className="px-2 py-1 bg-blue-500 text-white rounded text-xs hover:bg-blue-600 transition" onClick={() => loadHold(o.id)}>Load</button>
+                  <button className="px-2 py-1 bg-red-500 text-white rounded text-xs hover:bg-red-600 transition" onClick={() => deleteHoldOrder(o.id)}>Del</button>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       )}
     </div>
@@ -485,20 +554,6 @@ export default function POS() {
         </div>
       )}
 
-      {newCustomerForm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl p-6 w-11/12 max-w-md">
-            <h3 className="font-bold text-lg mb-4">New Customer</h3>
-            <input type="text" className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 mb-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-white" placeholder="Name" value={newCustName} onChange={e => setNewCustName(e.target.value)} />
-            <input type="tel" className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 mb-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-white" placeholder="Phone" value={customerPhone} onChange={e => setCustomerPhone(e.target.value)} />
-            <div className="flex gap-2">
-              <button className="flex-1 px-4 py-3 bg-green-600 text-white rounded-lg font-medium" onClick={createNewCustomer}>Create</button>
-              <button className="flex-1 px-4 py-3 bg-red-500 text-white rounded-lg font-medium" onClick={() => setNewCustomerForm(false)}>Cancel</button>
-            </div>
-          </div>
-        </div>
-      )}
-
       <div className="flex-1 overflow-y-auto space-y-1.5 mb-3 pr-1">
         {cart.length === 0 ? <div className="text-center text-sm opacity-50 py-8">🛒 No items in cart</div> : (
           cart.map((item, idx) => (
@@ -517,30 +572,64 @@ export default function POS() {
         )}
       </div>
 
+      <div className="flex items-center gap-2 mb-3">
+        <input type="number" placeholder="Discount" className="w-24 border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-base" value={discount} onChange={e => setDiscount(Number(e.target.value))} />
+        <span className="text-sm opacity-70">Discount</span>
+      </div>
+
       <div className="bg-gray-100 dark:bg-gray-700 rounded-lg p-3 mb-4 text-sm sm:text-base">
+        <div className="flex justify-between"><span>Subtotal</span> <span>{currency}{subtotal.toFixed(2)}</span></div>
+        {taxEnabled && <div className="flex justify-between"><span>Tax ({taxRate}%)</span> <span>{currency}{taxAmount.toFixed(2)}</span></div>}
+        {discount > 0 && <div className="flex justify-between text-red-500"><span>Discount</span> <span>-{currency}{discount.toFixed(2)}</span></div>}
         <div className="flex justify-between text-lg sm:text-xl font-bold mt-1 pt-1 border-t border-gray-300 dark:border-gray-500"><span>Total</span> <span>{currency}{final.toFixed(2)}</span></div>
       </div>
       
       <div className="mb-4">
+        <div className="text-sm font-medium mb-2">💳 Payment Method</div>
         <div className="grid grid-cols-3 gap-2">
-          {[{ method: 'cash', label: 'Cash', color: 'bg-green-600' }, { method: 'card', label: 'Card', color: 'bg-blue-600' }, { method: 'credit', label: 'Credit', color: 'bg-orange-500' }].map(pm => (
-            <button key={pm.method} className={`px-3 py-2 rounded-lg text-sm font-medium ${paymentMethod === pm.method ? `${pm.color} text-white` : 'bg-gray-200 dark:bg-gray-600 text-gray-700 dark:text-gray-300'}`} onClick={() => setPaymentMethod(pm.method)}>{pm.label}</button>
+          {[{ method: 'cash', label: 'Cash', color: 'bg-green-600' }, { method: 'card', label: 'Card', color: 'bg-blue-600' }, { method: 'cheque', label: 'Cheque', color: 'bg-purple-600' }, { method: 'credit', label: 'Credit', color: 'bg-orange-500' }, { method: 'bank_transfer', label: 'Bank', color: 'bg-teal-600' }].map(pm => (
+            <button key={pm.method} className={`px-3 py-2 rounded-lg text-sm sm:text-base font-medium transition-all hover:scale-105 ${paymentMethod === pm.method ? `${pm.color} text-white` : 'bg-gray-200 dark:bg-gray-600 text-gray-700 dark:text-gray-300'}`} onClick={() => setPaymentMethod(pm.method)}>{pm.label}</button>
           ))}
         </div>
       </div>
 
+      {paymentMethod === 'cheque' && (
+        <div className="grid grid-cols-2 gap-2 mb-3">
+          <input type="text" className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm" placeholder="Cheque Number" value={chequeNumber} onChange={e => setChequeNumber(e.target.value)} />
+          <input type="date" className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm" value={chequeDate} onChange={e => setChequeDate(e.target.value)} />
+        </div>
+      )}
+      {paymentMethod === 'bank_transfer' && (
+        <div className="mb-3"><input type="text" className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm" placeholder="Bank Reference" value={bankReference} onChange={e => setBankReference(e.target.value)} /></div>
+      )}
+      {paymentMethod === 'credit' && (
+        <div className="mb-3"><label className="block text-sm font-medium mb-1">Due Date</label><input type="date" className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm" value={creditDueDate} onChange={e => setCreditDueDate(e.target.value)} /></div>
+      )}
+
       <div className="flex gap-2 mt-auto">
         <button className="flex-1 px-3 py-3 bg-green-600 text-white rounded-lg font-bold hover:bg-green-700 disabled:opacity-50" onClick={() => checkout('completed')} disabled={cart.length === 0}>✅ Checkout ({totalItemCount})</button>
+        <button className="flex-1 px-3 py-3 bg-yellow-500 text-white rounded-lg font-bold hover:bg-yellow-600 disabled:opacity-50" onClick={() => checkout('hold')} disabled={cart.length === 0}>⏸️ Hold</button>
       </div>
 
       {lastBill && (
         <div className="flex gap-2 mt-2">
           <button onClick={shareLastBill} className="flex-1 px-4 py-3 bg-green-500 text-white rounded-lg hover:bg-green-600 flex items-center justify-center gap-2 font-bold shadow-md">
-            <BsWhatsapp size={18} /> WhatsApp
+            <BsWhatsapp size={18} /> Share Receipt
           </button>
-          <button onClick={loadBluetoothDevices} className="flex-1 px-4 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center justify-center gap-2 font-bold shadow-md">
-            <FiBluetooth size={18} /> BT Print
-          </button>
+          
+          <div className="flex-1 flex gap-2">
+            <select 
+              className="bg-gray-100 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg px-2 text-xs font-bold text-gray-700 dark:text-white"
+              value={printerSize}
+              onChange={(e) => setPrinterSize(Number(e.target.value))}
+            >
+              <option value={32}>58mm</option>
+              <option value={48}>80mm</option>
+            </select>
+            <button onClick={printViaWebBluetooth} disabled={isPrinting} className="flex-1 px-2 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center justify-center gap-2 font-bold shadow-md disabled:opacity-50">
+              {isPrinting ? 'Printing...' : <><FiBluetooth size={18} /> BT Print</>}
+            </button>
+          </div>
         </div>
       )}
     </div>
@@ -564,7 +653,6 @@ export default function POS() {
       )}
       {isMobile && mobileView === 'billing' && <div className="flex flex-col h-[calc(100vh-120px)]">{billingTerminal}</div>}
 
-      {/* Edit Item Modal */}
       {editModalOpen && selectedCartItem && (
         <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
           <div className="bg-white dark:bg-gray-800 rounded-2xl w-full max-w-md p-6 space-y-4 shadow-2xl">
@@ -591,65 +679,32 @@ export default function POS() {
         </div>
       )}
 
-      {/* CUSTOMER PICKER MODAL */}
       {customerModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
           <div className="bg-white dark:bg-gray-800 rounded-2xl w-full max-w-md p-6 shadow-2xl space-y-4">
             <div className="flex justify-between items-center border-b pb-3">
-              <h3 className="text-lg font-bold">📇 Select Contact</h3>
+              <h3 className="text-lg font-bold">📇 Import Contact</h3>
               <button onClick={() => setCustomerModal(false)}><FiX size={20} /></button>
             </div>
-            <label className="bg-blue-600 text-white text-xs font-bold px-3 py-2 rounded-lg cursor-pointer flex items-center justify-center gap-1">
-              <FiUpload /> Import .VCF File
+            <p className="text-sm opacity-80 text-center">ඔබගේ දුරකථනයේ Web Contacts API සඳහා සහාය නොදක්වයි. කරුණාකර VCF ෆයිල් එකක් හරහා අප්ලෝඩ් කරන්න.</p>
+            <label className="bg-blue-600 text-white text-sm font-bold px-4 py-3 rounded-lg cursor-pointer flex items-center justify-center gap-2">
+              <FiUpload /> VCF / VCard එකක් තෝරන්න
               <input type="file" accept=".vcf,.vcard" onChange={handleVcfUpload} className="hidden" />
             </label>
           </div>
         </div>
       )}
 
-      {/* DYNAMIC BLUETOOTH PRINTER MODAL */}
-      {btModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-          <div className="bg-white dark:bg-gray-800 rounded-2xl w-full max-w-md p-6 shadow-2xl space-y-4">
-            <div className="flex justify-between items-center border-b pb-3 border-gray-200 dark:border-gray-700">
-              <h3 className="text-lg font-bold">🖨️ Select Bluetooth Printer</h3>
-              <button onClick={() => setBtModalOpen(false)}><FiX size={20} /></button>
+      {newCustomerForm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl p-6 w-11/12 max-w-md">
+            <h3 className="font-bold text-lg mb-4">New Customer</h3>
+            <input type="text" className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 mb-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-white" placeholder="Name" value={newCustName} onChange={e => setNewCustName(e.target.value)} />
+            <input type="tel" className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 mb-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-white" placeholder="Phone" value={customerPhone} onChange={e => setCustomerPhone(e.target.value)} />
+            <div className="flex gap-2">
+              <button className="flex-1 px-4 py-3 bg-green-600 text-white rounded-lg font-medium" onClick={createNewCustomer}>Create</button>
+              <button className="flex-1 px-4 py-3 bg-red-500 text-white rounded-lg font-medium" onClick={() => setNewCustomerForm(false)}>Cancel</button>
             </div>
-            
-            {/* PAPER SIZE SELECTOR (58mm / 80mm) */}
-            <div>
-              <p className="text-xs font-semibold mb-2 text-gray-500">Select Paper Size:</p>
-              <div className="flex gap-2 bg-gray-100 dark:bg-gray-700 p-1.5 rounded-lg">
-                <button 
-                  className={`flex-1 py-2 rounded-md font-bold text-sm transition ${printerSize === 32 ? 'bg-blue-600 text-white shadow' : 'text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'}`} 
-                  onClick={() => setPrinterSize(32)}
-                >
-                  58mm (Small)
-                </button>
-                <button 
-                  className={`flex-1 py-2 rounded-md font-bold text-sm transition ${printerSize === 48 ? 'bg-blue-600 text-white shadow' : 'text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'}`} 
-                  onClick={() => setPrinterSize(48)}
-                >
-                  80mm (Large)
-                </button>
-              </div>
-            </div>
-
-            {btDevices.length === 0 ? (
-              <p className="text-center text-sm opacity-50 py-4">No paired printers found. Please pair your printer in phone settings first.</p>
-            ) : (
-              <div className="space-y-2 max-h-60 overflow-y-auto mt-2">
-                {btDevices.map((device, idx) => (
-                  <button key={idx} onClick={() => printViaBluetooth(device.address)} disabled={isPrinting} className="w-full text-left p-3 border border-gray-200 dark:border-gray-700 rounded-lg hover:bg-blue-50 dark:hover:bg-gray-700 flex justify-between items-center transition disabled:opacity-50">
-                    <div>
-                      <p className="font-bold">{device.name}</p>
-                      <p className="text-xs opacity-70">{device.address}</p>
-                    </div>
-                    {isPrinting ? <span className="text-xs text-blue-500 animate-pulse">Connecting...</span> : <FiBluetooth className="text-blue-500" />}
-                  </button>
-                ))}
-              </div>
-            )}
           </div>
         </div>
       )}
