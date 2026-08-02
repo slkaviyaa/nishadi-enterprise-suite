@@ -1,3 +1,4 @@
+export const dynamic = 'force-static'
 import { createClient } from '@supabase/supabase-js'
 
 const supabaseAdmin = createClient(

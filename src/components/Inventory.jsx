@@ -11,11 +11,25 @@ export default function Inventory() {
   const [importing, setImporting] = useState(false)
   const [selectedFile, setSelectedFile] = useState(null)
   const [error, setError] = useState('')
-  const [editId, setEditId] = useState(null)
+
+  // Edit Product States
+  const [editId, setEditId] = useState(null) // branch_products id
+  const [editProductId, setEditProductId] = useState(null) // products id
   const [editName, setEditName] = useState('')
+  const [editSku, setEditSku] = useState('')
+  const [editCategory, setEditCategory] = useState('')
   const [editPrice, setEditPrice] = useState('')
   const [editCost, setEditCost] = useState('')
   const [editStock, setEditStock] = useState('')
+
+  // Manage Item Checkbox States
+  const [editTrackProfit, setEditTrackProfit] = useState(true)
+  const [editLowStockAlerts, setEditLowStockAlerts] = useState(true)
+  const [editAutoUpdateStock, setEditAutoUpdateStock] = useState(true)
+  const [editPreventOutOfStock, setEditPreventOutOfStock] = useState(false)
+  const [editHasBarcode, setEditHasBarcode] = useState(false)
+  const [editTrackExpiry, setEditTrackExpiry] = useState(false)
+  const [editAddTax, setEditAddTax] = useState(false)
 
   // Stock movement report
   const [fromDate, setFromDate] = useState('')
@@ -33,14 +47,34 @@ export default function Inventory() {
     try {
       const { data, error } = await supabase
         .from('branch_products')
-        .select(`id, price, cost_price, stock_quantity, products ( sku, name, category ), product_variants ( variant_value, sku )`)
+        .select(`
+          id, 
+          price, 
+          cost_price, 
+          stock_quantity, 
+          products ( 
+            id, sku, name, category,
+            track_profit, low_stock_alerts, auto_update_stock,
+            prevent_out_of_stock_sale, has_barcode, track_expiry, add_tax
+          ), 
+          product_variants ( variant_value, sku )
+        `)
         .eq('branch_id', branch)
         .eq('is_active', true)
-      if (error) { console.error('Load error:', error); setError('Failed to load: ' + error.message); return }
+
+      if (error) { 
+        console.error('Load error:', error)
+        setError('Failed to load: ' + error.message)
+        return 
+      }
+
       setItems(data || [])
       setError('')
       calculateTotals(data || [])
-    } catch (err) { console.error('Load exception:', err); setError('Unexpected error') }
+    } catch (err) { 
+      console.error('Load exception:', err)
+      setError('Unexpected error') 
+    }
   }
 
   const calculateTotals = (data) => {
@@ -72,10 +106,25 @@ export default function Inventory() {
 
   const handleFileSelect = (e) => setSelectedFile(e.target.files[0])
 
-  // Helper: Map Excel columns to expected keys
+  // SMART HELPER: Case & Symbol Flexible Header Matcher for Excel Import
   const getColumnValue = (row, possibleNames) => {
+    if (!row) return null
+
+    // 1. Direct exact key match
     for (const name of possibleNames) {
-      if (row[name] !== undefined) return row[name]
+      if (row[name] !== undefined && row[name] !== null && String(row[name]).trim() !== '') {
+        return String(row[name]).trim()
+      }
+    }
+
+    // 2. Case-insensitive and space/underscore flexible match
+    const rowKeys = Object.keys(row)
+    for (const target of possibleNames) {
+      const cleanTarget = target.toLowerCase().replace(/[^a-z0-9]/g, '')
+      const foundKey = rowKeys.find(k => k.toLowerCase().replace(/[^a-z0-9]/g, '') === cleanTarget)
+      if (foundKey && row[foundKey] !== undefined && row[foundKey] !== null && String(row[foundKey]).trim() !== '') {
+        return String(row[foundKey]).trim()
+      }
     }
     return null
   }
@@ -90,7 +139,6 @@ export default function Inventory() {
       const ws = wb.Sheets[wb.SheetNames[0]]
       const rows = XLSX.utils.sheet_to_json(ws)
 
-      // Debug: show column names
       if (rows.length > 0) {
         console.log('Excel columns detected:', Object.keys(rows[0]))
       }
@@ -98,33 +146,43 @@ export default function Inventory() {
       let importedCount = 0
       for (const row of rows) {
         try {
-          // Flexible name mapping (Item_Name, Name, Product Name, item name, etc.)
-          const itemName = getColumnValue(row, ['Item_Name', 'Name', 'Product Name', 'ProductName', 'item name', 'Item Name'])
-          if (!itemName) {
-            console.warn('Skipping row - no product name found:', row)
-            continue
-          }
+          // 1. Dedicated Search for Item Name / Description
+          const itemName = getColumnValue(row, [
+            'Item_Name', 'Item Name', 'Product Name', 'ProductName', 
+            'Item Description', 'Item_Description', 'Description', 'Particulars', 
+            'Name', 'item name', 'item_name'
+          ])
 
-          const itemSKU = getColumnValue(row, ['Item_SKU', 'SKU', 'sku', 'Item Code']) 
-            || itemName.replace(/\s+/g, '_').toUpperCase()
+          // 2. Dedicated Search for SKU / Item Code
+          const itemSKU = getColumnValue(row, [
+            'Item_SKU', 'Item SKU', 'SKU', 'sku', 
+            'Item Code', 'Item_Code', 'Code', 'code', 
+            'Product Code', 'Product_Code', 'Part No', 'Part_No', 'Part Number'
+          ]) || (itemName ? itemName.replace(/\s+/g, '_').toUpperCase() : null)
+
+          if (!itemName && !itemSKU) continue
+
+          const finalName = itemName || itemSKU
+          const finalSKU = itemSKU || finalName.replace(/\s+/g, '_').toUpperCase()
 
           const category = getColumnValue(row, ['Category', 'category', 'Product Category']) || null
           const barcode = getColumnValue(row, ['Item_Barcode', 'Barcode', 'barcode']) || null
 
-          // Upsert product
+          // Upsert product into `products` table (Name and SKU updated correctly)
           const { data: prod } = await supabase.from('products')
             .upsert({ 
-              sku: itemSKU, 
-              name: itemName, 
+              sku: finalSKU, 
+              name: finalName, 
               category, 
               barcode 
             }, { onConflict: 'sku' })
             .select('id')
             .single()
+
           if (!prod) continue
 
-          // Variant handling (optional)
-          const subItemName = getColumnValue(row, ['SubItem_Name', 'Variant Name', 'SubItem Name'])
+          // Variant handling
+          const subItemName = getColumnValue(row, ['SubItem_Name', 'Variant Name', 'SubItem Name', 'Variant'])
           let variantId = null
           if (subItemName) {
             const { data: variant } = await supabase.from('product_variants')
@@ -140,12 +198,10 @@ export default function Inventory() {
             variantId = variant?.id
           }
 
-          // Price & Stock
-          const price = Number(getColumnValue(row, ['Selling_Price_SubItem', 'Price', 'Selling Price', 'Sell Price']) || 0)
-          const cost = Number(getColumnValue(row, ['Cost_Price_SubItem', 'Cost', 'Cost Price', 'Purchase Price']) || 0)
-          const stock = Number(getColumnValue(row, ['Stock_Count_SubItem', 'Stock', 'Quantity', 'Qty']) || 0)
+          const price = Number(getColumnValue(row, ['Selling_Price_SubItem', 'Price', 'Selling Price', 'Sell Price', 'SellingPrice']) || 0)
+          const cost = Number(getColumnValue(row, ['Cost_Price_SubItem', 'Cost', 'Cost Price', 'Purchase Price', 'CostPrice']) || 0)
+          const stock = Number(getColumnValue(row, ['Stock_Count_SubItem', 'Stock', 'Quantity', 'Qty', 'Stock_Count']) || 0)
 
-          // Upsert branch_products
           const query = supabase.from('branch_products')
             .select('id')
             .eq('branch_id', branch)
@@ -177,13 +233,64 @@ export default function Inventory() {
     reader.readAsBinaryString(selectedFile)
   }
 
-  // ... ඉතිරි කොටස් (edit, delete, export, stock movement) නොවෙනස්ව පවතී ...
-  // (පහත ඒවා copy කරන්න, නැත්නම් ඉහත code block එක පමණක් replace කරන්න)
+  const handleDelete = async (id) => { 
+    if (confirm('Delete this product?')) { 
+      await supabase.from('branch_products').update({ is_active: false }).eq('id', id)
+      loadItems() 
+    } 
+  }
 
-  const handleDelete = async (id) => { if (confirm('Delete this product?')) { await supabase.from('branch_products').update({ is_active: false }).eq('id', id); loadItems() } }
+  // Start Edit & populate Checkboxes
+  const startEdit = (item) => { 
+    setEditId(item.id)
+    setEditProductId(item.products?.id)
+    setEditName(item.products?.name || '')
+    setEditSku(item.products?.sku || '')
+    setEditCategory(item.products?.category || '')
+    setEditPrice(item.price || 0)
+    setEditCost(item.cost_price || 0)
+    setEditStock(item.stock_quantity || 0)
 
-  const startEdit = (item) => { setEditId(item.id); setEditName(item.products?.name || ''); setEditPrice(item.price); setEditCost(item.cost_price); setEditStock(item.stock_quantity) }
-  const saveEdit = async () => { await supabase.from('branch_products').update({ price: editPrice, cost_price: editCost, stock_quantity: editStock }).eq('id', editId); setEditId(null); loadItems() }
+    // Load checkbox values
+    setEditTrackProfit(item.products?.track_profit ?? true)
+    setEditLowStockAlerts(item.products?.low_stock_alerts ?? true)
+    setEditAutoUpdateStock(item.products?.auto_update_stock ?? true)
+    setEditPreventOutOfStock(item.products?.prevent_out_of_stock_sale ?? false)
+    setEditHasBarcode(item.products?.has_barcode ?? false)
+    setEditTrackExpiry(item.products?.track_expiry ?? false)
+    setEditAddTax(item.products?.add_tax ?? false)
+  }
+
+  // Save Edit Function with Checkboxes
+  const saveEdit = async () => { 
+    try {
+      if (editProductId) {
+        await supabase.from('products').update({
+          name: editName,
+          sku: editSku,
+          category: editCategory,
+          track_profit: editTrackProfit,
+          low_stock_alerts: editLowStockAlerts,
+          auto_update_stock: editAutoUpdateStock,
+          prevent_out_of_stock_sale: editPreventOutOfStock,
+          has_barcode: editHasBarcode,
+          track_expiry: editTrackExpiry,
+          add_tax: editAddTax
+        }).eq('id', editProductId)
+      }
+
+      await supabase.from('branch_products').update({ 
+        price: Number(editPrice), 
+        cost_price: Number(editCost), 
+        stock_quantity: Number(editStock) 
+      }).eq('id', editId)
+
+      setEditId(null)
+      loadItems()
+    } catch (err) {
+      console.error('Error saving item:', err)
+    }
+  }
 
   const exportToExcel = () => {
     const data = items.map(i => ({
@@ -253,7 +360,7 @@ export default function Inventory() {
   }
 
   return (
-    <div className="space-y-6 text-gray-900 dark:text-gray-100">
+    <div className="space-y-6 text-gray-900 dark:text-gray-100 p-4">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
         <h2 className="text-2xl font-bold dark:text-white">Inventory</h2>
         <div className="flex gap-2 items-center flex-wrap">
@@ -267,17 +374,88 @@ export default function Inventory() {
       {message && <div className={`alert ${message.includes('completed') ? 'alert-success' : 'alert-info'}`}>{message}</div>}
       {error && <div className="alert alert-error">{error}</div>}
 
+      {/* MANAGE ITEM MODAL WITH CHECKBOXES */}
       {editId && (
         <div className="modal modal-open">
-          <div className="modal-box">
-            <h3 className="font-bold text-lg mb-2">Edit Product</h3>
-            <input className="input input-bordered w-full mb-2" value={editName} disabled />
-            <div className="flex gap-2 mb-2">
-              <input type="number" className="input input-bordered w-1/2" placeholder="Price" value={editPrice} onChange={e => setEditPrice(Number(e.target.value))} />
-              <input type="number" className="input input-bordered w-1/2" placeholder="Cost" value={editCost} onChange={e => setEditCost(Number(e.target.value))} />
+          <div className="modal-box max-w-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white border border-gray-200 dark:border-gray-700 rounded-2xl p-6">
+            <div className="flex justify-between items-center mb-4 border-b border-gray-200 dark:border-gray-700 pb-2">
+              <h3 className="font-bold text-lg text-blue-600 dark:text-blue-400">MANAGE ITEM</h3>
+              <button className="btn btn-sm btn-circle btn-ghost" onClick={() => setEditId(null)}>✕</button>
             </div>
-            <input type="number" className="input input-bordered w-full mb-2" placeholder="Stock" value={editStock} onChange={e => setEditStock(Number(e.target.value))} />
-            <div className="modal-action"><button className="btn btn-primary" onClick={saveEdit}>Save</button><button className="btn" onClick={() => setEditId(null)}>Cancel</button></div>
+
+            <div className="space-y-3 max-h-[70vh] overflow-y-auto pr-1">
+              <div>
+                <label className="text-xs font-semibold opacity-70">Item Name *</label>
+                <input className="input input-bordered w-full font-semibold" value={editName} onChange={e => setEditName(e.target.value)} />
+              </div>
+
+              <div>
+                <label className="text-xs font-semibold opacity-70">Variant Name / SKU</label>
+                <input className="input input-bordered w-full font-semibold" value={editSku} onChange={e => setEditSku(e.target.value)} placeholder="Variant Name" />
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-xs font-semibold opacity-70">Selling Price *</label>
+                  <input type="number" className="input input-bordered w-full font-bold" value={editPrice} onChange={e => setEditPrice(e.target.value)} />
+                </div>
+                <div>
+                  <label className="text-xs font-semibold opacity-70">Cost Price</label>
+                  <input type="number" className="input input-bordered w-full" value={editCost} onChange={e => setEditCost(e.target.value)} />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-xs font-semibold opacity-70">Stock Available</label>
+                <input type="number" className="input input-bordered w-full font-bold" value={editStock} onChange={e => setEditStock(e.target.value)} />
+              </div>
+
+              {/* CHECKBOXES SECTION */}
+              <div className="border-t border-gray-200 dark:border-gray-700 pt-3 space-y-2">
+                <div className="flex items-center gap-2">
+                  <input type="checkbox" id="edit_track_profit" checked={editTrackProfit} onChange={e => setEditTrackProfit(e.target.checked)} className="checkbox checkbox-sm checkbox-primary" />
+                  <label htmlFor="edit_track_profit" className="text-sm cursor-pointer">Track Profit?</label>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <input type="checkbox" id="edit_low_stock" checked={editLowStockAlerts} onChange={e => setEditLowStockAlerts(e.target.checked)} className="checkbox checkbox-sm checkbox-primary" />
+                  <label htmlFor="edit_low_stock" className="text-sm cursor-pointer">Low stock alerts?</label>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <input type="checkbox" id="edit_auto_update" checked={editAutoUpdateStock} onChange={e => setEditAutoUpdateStock(e.target.checked)} className="checkbox checkbox-sm checkbox-primary" />
+                  <label htmlFor="edit_auto_update" className="text-sm cursor-pointer">Auto-update stock on item sales</label>
+                </div>
+
+                {/* PREVENT OUT OF STOCK CHECKBOX */}
+                <div className="flex items-center gap-2 p-2 bg-blue-50 dark:bg-blue-900/30 rounded-lg border border-blue-200 dark:border-blue-800">
+                  <input type="checkbox" id="edit_prevent_stock" checked={editPreventOutOfStock} onChange={e => setEditPreventOutOfStock(e.target.checked)} className="checkbox checkbox-sm checkbox-primary" />
+                  <label htmlFor="edit_prevent_stock" className="text-sm font-bold text-blue-700 dark:text-blue-300 cursor-pointer">
+                    🔒 Prevent item sale when out of stock?
+                  </label>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <input type="checkbox" id="edit_barcode" checked={editHasBarcode} onChange={e => setEditHasBarcode(e.target.checked)} className="checkbox checkbox-sm checkbox-primary" />
+                  <label htmlFor="edit_barcode" className="text-sm cursor-pointer">Barcode?</label>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <input type="checkbox" id="edit_expiry" checked={editTrackExpiry} onChange={e => setEditTrackExpiry(e.target.checked)} className="checkbox checkbox-sm checkbox-primary" />
+                  <label htmlFor="edit_expiry" className="text-sm cursor-pointer">Track Expiry?</label>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <input type="checkbox" id="edit_tax" checked={editAddTax} onChange={e => setEditAddTax(e.target.checked)} className="checkbox checkbox-sm checkbox-primary" />
+                  <label htmlFor="edit_tax" className="text-sm cursor-pointer">Add Tax</label>
+                </div>
+              </div>
+            </div>
+
+            <div className="modal-action mt-4 border-t border-gray-200 dark:border-gray-700 pt-3">
+              <button className="btn btn-primary flex-1" onClick={saveEdit}>Save Item</button>
+              <button className="btn flex-1" onClick={() => setEditId(null)}>Cancel</button>
+            </div>
           </div>
         </div>
       )}
@@ -317,7 +495,7 @@ export default function Inventory() {
         </div>
       </div>
 
-      {/* Main Products Table – Beautiful, Responsive */}
+      {/* Main Products Table */}
       <div className="overflow-x-auto rounded-lg border border-gray-200 dark:border-gray-700">
         <table className="w-full min-w-[800px] divide-y divide-gray-200 dark:divide-gray-700">
           <thead className="bg-gray-50 dark:bg-gray-800">

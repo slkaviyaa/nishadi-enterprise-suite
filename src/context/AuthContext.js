@@ -7,6 +7,9 @@ import MainLayout from '../components/MainLayout'
 
 const AuthContext = createContext(null)
 
+// Default Branch ID for fallback (Main Branch)
+const DEFAULT_BRANCH_ID = '11111111-1111-1111-1111-111111111111'
+
 export function AuthProvider({ children }) {
   const pathname = usePathname()
   const [session, setSession] = useState(null)
@@ -20,40 +23,62 @@ export function AuthProvider({ children }) {
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
       setSession(data.session)
-      if (data.session) loadUser(data.session.user.id)
+      if (data.session) loadUser(data.session.user)
       else setLoading(false)
     })
     const { data: listener } = supabase.auth.onAuthStateChange((_e, session) => {
       setSession(session)
-      if (session) loadUser(session.user.id)
+      if (session) loadUser(session.user)
       else { setBranch(null); setUser(null); setLoading(false) }
     })
     return () => listener.subscription.unsubscribe()
   }, [])
 
-  const loadUser = async (userId) => {
-    const { data: staff } = await supabase.from('staff')
-      .select('id, branch_id, username')
-      .eq('id', userId)
-      .maybeSingle()
-    if (staff) {
-      setUser(staff)
-      setBranch(staff.branch_id)
+  const loadUser = async (authUser) => {
+    if (!authUser) {
       setLoading(false)
       return
     }
 
-    const { data: profile } = await supabase.from('profiles')
-      .select('id, branch_id, display_name')
+    const userId = authUser.id
+
+    // 1. Check staff table first
+    const { data: staff } = await supabase.from('staff')
+      .select('id, branch_id, username, display_name, role, permissions')
       .eq('id', userId)
       .maybeSingle()
-    if (profile) {
-      setUser(profile)
-      setBranch(profile.branch_id)
-    } else {
-      setUser(null)
-      setBranch(null)
+
+    if (staff) {
+      setUser(staff)
+      // Branch ID එක නැත්නම් Default Branch එක දානවා
+      setBranch(staff.branch_id || DEFAULT_BRANCH_ID)
+      setLoading(false)
+      return
     }
+
+    // 2. Check profiles table
+    const { data: profile } = await supabase.from('profiles')
+      .select('id, branch_id, display_name, role')
+      .eq('id', userId)
+      .maybeSingle()
+
+    if (profile) {
+      setUser({ ...profile, role: profile.role || 'owner' })
+      setBranch(profile.branch_id || DEFAULT_BRANCH_ID)
+      setLoading(false)
+      return
+    }
+
+    // 3. Database එකේ නැති අලුත් User කෙනෙක් නම්, Default Fallback User Profile එකක් සෙට් කරලා Dashboard එක ඕපන් කරනවා
+    const fallbackUser = {
+      id: userId,
+      display_name: authUser.user_metadata?.full_name || authUser.email?.split('@')[0] || 'User',
+      role: 'owner',
+      branch_id: DEFAULT_BRANCH_ID
+    }
+
+    setUser(fallbackUser)
+    setBranch(DEFAULT_BRANCH_ID)
     setLoading(false)
   }
 
@@ -69,12 +94,12 @@ export function AuthProvider({ children }) {
 
   const signOut = () => supabase.auth.signOut()
 
-  if (loading) return <div className="flex h-screen items-center justify-center">Loading...</div>
+  if (loading) return <div className="flex h-screen items-center justify-center font-medium">Loading...</div>
 
   if (session) {
-    if (!branch) return <div className="alert alert-error m-4">No branch assigned. Contact admin.</div>
+    // No branch restriction check block anymore — defaults automatically
     return (
-      <AuthContext.Provider value={{ branch, user, signInWithGoogle, signOut }}>
+      <AuthContext.Provider value={{ branch: branch || DEFAULT_BRANCH_ID, user, signInWithGoogle, signOut }}>
         <MainLayout>{children}</MainLayout>
       </AuthContext.Provider>
     )
