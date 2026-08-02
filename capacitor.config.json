@@ -5,5 +5,14 @@
   "server": {
     "url": "https://nishadi-enterprise-suite.vercel.app",
     "cleartext": true
+  },
+  "plugins": {
+    "SplashScreen": {
+      "launchShowDuration": 3000,
+      "launchAutoHide": true,
+      "backgroundColor": "#ffffff",
+      "showSpinner": true,
+      "androidSpinnerStyle": "large"
+    }
   }
 }

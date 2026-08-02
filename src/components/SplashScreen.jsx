@@ -1,17 +1,27 @@
-import Image from 'next/image';
+'use client'
+import { useState, useEffect } from 'react'
+import { Inter } from "next/font/google";
+import "./globals.css";
+import SplashScreen from "@/src/components/SplashScreen"; // අර ඔයාගේ කම්පෝනන්ට් එක
 
-export default function SplashScreen() {
+const inter = Inter({ subsets: ["latin"] });
+
+export default function RootLayout({ children }) {
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    // තත්පර 2කින් Web Splash Screen එක අයින් වෙනවා
+    const timer = setTimeout(() => {
+      setLoading(false);
+    }, 2000);
+    return () => clearTimeout(timer);
+  }, []);
+
   return (
-    <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-blue-900">
-      <div className="animate-pulse">
-        <Image src="/logo.png" alt="Logo" width={120} height={120} />
-      </div>
-      <h1 className="text-white text-2xl font-bold mt-6">Nishadi Enterprise Suite</h1>
-      <p className="text-blue-200 text-sm mt-2">Point of Sale & Management</p>
-      <div className="absolute bottom-8 text-center">
-        <p className="text-blue-300 text-xs">Powered by</p>
-        <p className="text-white text-sm font-semibold">Ceylon Digi Solutions</p>
-      </div>
-    </div>
+    <html lang="en">
+      <body className={inter.className}>
+        {loading ? <SplashScreen /> : children}
+      </body>
+    </html>
   );
 }
