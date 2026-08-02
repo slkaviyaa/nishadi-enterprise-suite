@@ -7,6 +7,8 @@ import { useToast } from '../context/ToastContext'
 import { Html5Qrcode } from 'html5-qrcode'
 import { BsUpcScan, BsWhatsapp } from 'react-icons/bs'
 import { FiEdit3, FiTrash2, FiPlus, FiMinus, FiX, FiUserCheck, FiUpload } from 'react-icons/fi'
+import { Camera } from '@capacitor/camera'
+import { Contacts } from '@capacitor/contacts'
 import jsPDF from 'jspdf'
 
 // Tax system (parallel branch) ID
@@ -103,6 +105,49 @@ export default function POS() {
     return () => document.removeEventListener('mousedown', handler)
   }, [])
 
+  // ==========================================
+  // 🛡️ SMART PERMISSION CHECKER (BULLETPROOF)
+  // ==========================================
+  const ensurePermission = async (type) => {
+    // Web Browser එකක් නම් කෙළින්ම true දෙනවා
+    if (typeof window === 'undefined' || !window.Capacitor || !window.Capacitor.isNativePlatform()) {
+      return true;
+    }
+
+    try {
+      if (type === 'camera') {
+        let status = await Camera.checkPermissions();
+        if (status.camera === 'granted') return true;
+        
+        status = await Camera.requestPermissions();
+        if (status.camera === 'granted') return true;
+        
+        // Deny කරලා නම් මේ Alert එක එනවා
+        alert('⚠️ Camera Permission ලබා දී නැත!\n\nකරුණාකර Phone Settings -> Apps -> Nishadi Enterprise -> Permissions වෙත ගොස් Camera "Allow" කරන්න.');
+        return false;
+      }
+
+      if (type === 'contacts') {
+        let status = await Contacts.checkPermissions();
+        if (status.contacts === 'granted') return true;
+        
+        status = await Contacts.requestPermissions();
+        if (status.contacts === 'granted') return true;
+        
+        // Deny කරලා නම් මේ Alert එක එනවා
+        alert('⚠️ Contacts Permission ලබා දී නැත!\n\nකරුණාකර Phone Settings -> Apps -> Nishadi Enterprise -> Permissions වෙත ගොස් Contacts "Allow" කරන්න.');
+        return false;
+      }
+      
+      // අනාගතයේදී Bluetooth ආවම මෙතනට දාන්න පුළුවන්
+      // if (type === 'bluetooth') { ... }
+
+    } catch (error) {
+      console.error(`Permission Error (${type}):`, error);
+      return false;
+    }
+  };
+
   // ====== CART QUANTITY & OUT OF STOCK LOGIC ======
   const updateCartQty = (id, newQty) => {
     if (newQty < 1) return
@@ -132,7 +177,6 @@ export default function POS() {
 
   const removeFromCart = (id) => setCart(prev => prev.filter(i => i.id !== id))
 
-  // ====== EDIT CART ITEM MODAL HANDLERS ======
   const openEditModal = (item) => {
     setSelectedCartItem(item)
     setEditPrice(item.price)
@@ -143,20 +187,13 @@ export default function POS() {
 
   const handleUpdateCartItem = () => {
     if (!selectedCartItem) return
-
     if (selectedCartItem.preventOutOfStock && editQty > selectedCartItem.stock) {
       showToast(`⚠️ Quantity exceeds stock limit (${selectedCartItem.stock})`, 'error')
       return
     }
-
     setCart(prev => prev.map(item => {
       if (item.id === selectedCartItem.id) {
-        return {
-          ...item,
-          price: Number(editPrice),
-          qty: Number(editQty),
-          applyOffer: applyOffer
-        }
+        return { ...item, price: Number(editPrice), qty: Number(editQty), applyOffer: applyOffer }
       }
       return item
     }))
@@ -165,14 +202,12 @@ export default function POS() {
     showToast('Item updated!')
   }
 
-  // Calculate totals
   const subtotal = cart.reduce((s, i) => s + (i.applyOffer ? i.price : i.originalPrice) * i.qty, 0)
   const taxAmount = taxEnabled ? (subtotal * taxRate / 100) : 0
   const total = subtotal + taxAmount
   const final = total - discount
   const totalItemCount = cart.reduce((s, i) => s + i.qty, 0)
 
-  // Customer search functions
   const filteredCustomers = customers.filter(c => {
     if (!customerSearch.trim()) return false
     const s = customerSearch.toLowerCase()
@@ -195,25 +230,15 @@ export default function POS() {
 
   const createNewCustomer = async () => {
     if (!newCustName || !customerPhone) { showToast('Name and Phone required', 'error'); return }
-
     const { data: c, error: mainErr } = await supabase.from('customers')
       .insert({ branch_id: branch, name: newCustName, phone: customerPhone, address: newCustAddress })
       .select().single()
     if (mainErr) { showToast('Failed to create customer', 'error'); return }
 
     try {
-      const { data: existing } = await supabase.from('customers')
-        .select('id')
-        .eq('branch_id', PARALLEL_BRANCH_ID)
-        .eq('phone', customerPhone)
-        .maybeSingle()
-      if (!existing) {
-        await supabase.from('customers')
-          .insert({ branch_id: PARALLEL_BRANCH_ID, name: newCustName, phone: customerPhone, address: newCustAddress })
-      }
-    } catch (err) {
-      console.error('Parallel customer sync failed:', err)
-    }
+      const { data: existing } = await supabase.from('customers').select('id').eq('branch_id', PARALLEL_BRANCH_ID).eq('phone', customerPhone).maybeSingle()
+      if (!existing) await supabase.from('customers').insert({ branch_id: PARALLEL_BRANCH_ID, name: newCustName, phone: customerPhone, address: newCustAddress })
+    } catch (err) { console.error('Parallel customer sync failed:', err) }
 
     setCustomers(prev => [...prev, c])
     setSelectedCustomer(c)
@@ -224,35 +249,37 @@ export default function POS() {
     showToast('Customer created & synced!')
   }
 
-  // SMART CONTACT PICKER (Native Permission Prompt on Android + Popup Modal on iOS/PC)
+  // ====== CAPACITOR SMART CONTACT PICKER ======
   const pickContact = async () => {
-    if (typeof window !== 'undefined' && 'contacts' in navigator && 'ContactsManager' in window) {
-      try {
-        const contacts = await navigator.contacts.select(['tel', 'name'], { multiple: false })
-        if (contacts?.length) {
-          const phone = contacts[0].tel?.[0]?.replace(/[^\d+]/g, '') || ''
-          const name = contacts[0].name?.[0] || ''
-          if (phone) {
-            const cust = customers.find(c => c.phone === phone || (c.phone && c.phone.endsWith(phone.slice(-9))))
-            if (cust) {
-              selectCustomerFromSearch(cust)
-            } else {
-              setCustomerPhone(phone)
-              setNewCustName(name || 'Cust ' + phone.slice(-4))
-              setNewCustomerForm(true)
-            }
-            return
-          }
-        }
-      } catch (err) {
-        console.log('Native contact selection fallback triggered:', err)
-      }
+    // අර අපි හදපු Permission Checker එක මෙතනින් කෝල් කරනවා
+    const hasPermission = await ensurePermission('contacts');
+    
+    if (!hasPermission) {
+       // Permission නැත්නම් (හෝ Deny කරලා නම්) අනිවාර්යයෙන්ම Fallback Modal එක (Web view) පෙන්වනවා.
+       setCustomerModal(true);
+       return;
     }
-    // Popup fallback for iOS, PC, Mac and Unsupported Web View Browsers
-    setCustomerModal(true)
+
+    try {
+      const result = await Contacts.pickContact()
+      if (result && result.contact) {
+        const name = result.contact.name || ''
+        const phone = result.contact.phoneNumbers?.[0]?.number || result.contact.telephone || ''
+        
+        const cleanPhone = phone.replace(/[^\d+]/g, '')
+        if (cleanPhone) {
+          const cust = customers.find(c => c.phone === cleanPhone || (c.phone && c.phone.endsWith(cleanPhone.slice(-9))))
+          if (cust) { selectCustomerFromSearch(cust) } 
+          else { setCustomerPhone(cleanPhone); setNewCustName(name || 'Cust ' + cleanPhone.slice(-4)); setNewCustomerForm(true) }
+          return
+        }
+      }
+    } catch (err) {
+      console.log('Contact picker error:', err)
+      setCustomerModal(true)
+    }
   }
 
-  // Parse uploaded .VCF Contact File (For iPhone / PC)
   const handleVcfUpload = (e) => {
     const file = e.target.files?.[0]
     if (!file) return
@@ -266,13 +293,8 @@ export default function POS() {
 
       if (phone || name) {
         const cust = customers.find(c => c.phone === phone)
-        if (cust) {
-          selectCustomerFromSearch(cust)
-        } else {
-          setCustomerPhone(phone)
-          setNewCustName(name || 'Cust ' + phone.slice(-4))
-          setNewCustomerForm(true)
-        }
+        if (cust) selectCustomerFromSearch(cust)
+        else { setCustomerPhone(phone); setNewCustName(name || 'Cust ' + phone.slice(-4)); setNewCustomerForm(true) }
         setCustomerModal(false)
         showToast('Contact loaded from VCF file!')
       } else {
@@ -283,23 +305,18 @@ export default function POS() {
   }
 
   const checkout = async (status = 'completed') => {
+    // Checkout Logic (Unchanged)
     if (cart.length === 0) return
-
     for (const item of cart) {
       if (item.preventOutOfStock) {
         const { data: bp } = await supabase.from('branch_products').select('stock_quantity').eq('id', item.id).single()
-        if (!bp || bp.stock_quantity < item.qty) { 
-          showToast(`Insufficient stock for ${item.name}`, 'error')
-          return 
-        }
+        if (!bp || bp.stock_quantity < item.qty) { showToast(`Insufficient stock for ${item.name}`, 'error'); return }
       }
     }
 
     let cid = selectedCustomer?.id
     if (!cid && customerPhone) {
-      const { data: nc } = await supabase.from('customers')
-        .insert({ branch_id: branch, phone: customerPhone, name: 'Cust ' + customerPhone.slice(-4) })
-        .select().single()
+      const { data: nc } = await supabase.from('customers').insert({ branch_id: branch, phone: customerPhone, name: 'Cust ' + customerPhone.slice(-4) }).select().single()
       if (nc) { cid = nc.id; setCustomers(prev => [...prev, nc]); setSelectedCustomer(nc) }
     }
 
@@ -315,34 +332,22 @@ export default function POS() {
     if (orderError) { showToast('Order failed: ' + orderError.message, 'error'); return }
 
     if (order) {
-      await supabase.from('order_items').insert(cart.map(i => ({
-        order_id: order.id, branch_product_id: i.id, quantity: i.qty, price: i.price
-      })))
-
+      await supabase.from('order_items').insert(cart.map(i => ({ order_id: order.id, branch_product_id: i.id, quantity: i.qty, price: i.price })))
       for (const item of cart) {
         if (item.autoUpdateStock !== false) {
-          const { error: stockErr } = await supabase.rpc('decrement_stock', { bp_id: item.id, qty: item.qty })
-          if (stockErr) console.error(`Stock update failed for ${item.name}: ${stockErr.message}`)
+          await supabase.rpc('decrement_stock', { bp_id: item.id, qty: item.qty })
         }
       }
 
       if (status === 'completed') {
-        try {
-          await supabase.rpc('create_parallel_order', {
-            main_order_id: order.id,
-            target_branch_id: PARALLEL_BRANCH_ID
-          });
-        } catch (err) {
-          console.error('Parallel order sync failed:', err);
-          showToast('Bill cut but tax system sync failed', 'warning');
-        }
+        try { await supabase.rpc('create_parallel_order', { main_order_id: order.id, target_branch_id: PARALLEL_BRANCH_ID }); } 
+        catch (err) { showToast('Bill cut but tax system sync failed', 'warning'); }
       }
 
       if (selectedCustomer && paymentMethod === 'credit' && status === 'completed') {
         await supabase.from('credit_transactions').insert({
-          customer_id: selectedCustomer.id, branch_id: branch, amount: final,
-          type: 'purchase', due_date: creditDueDate || new Date(Date.now() + 30*24*60*60*1000).toISOString().split('T')[0],
-          payment_mode: 'credit'
+          customer_id: selectedCustomer.id, branch_id: branch, amount: final, type: 'purchase',
+          due_date: creditDueDate || new Date(Date.now() + 30*24*60*60*1000).toISOString().split('T')[0], payment_mode: 'credit'
         })
         await supabase.from('customers').update({ total_credit: selectedCustomer.total_credit + final }).eq('id', selectedCustomer.id)
       }
@@ -354,26 +359,16 @@ export default function POS() {
       setPaymentMethod('cash'); setChequeNumber(''); setChequeDate(''); setBankReference(''); setCreditDueDate('')
       
       if (status === 'hold') {
-        supabase.from('orders').select('id, total, hold_note, created_at')
-          .eq('branch_id', branch).eq('status', 'hold')
-          .order('created_at', { ascending: false })
-          .then(({ data }) => setHoldOrders(data || []))
+        supabase.from('orders').select('id, total, hold_note, created_at').eq('branch_id', branch).eq('status', 'hold').order('created_at', { ascending: false }).then(({ data }) => setHoldOrders(data || []))
       }
       if (isMobile) setMobileView('products')
     }
   }
 
   const loadHold = async (id) => {
-    const { data } = await supabase.from('order_items')
-      .select('branch_product_id, quantity, price, branch_products(products(name, prevent_out_of_stock_sale, auto_update_stock))')
-      .eq('order_id', id)
+    const { data } = await supabase.from('order_items').select('branch_product_id, quantity, price, branch_products(products(name, prevent_out_of_stock_sale, auto_update_stock))').eq('order_id', id)
     if (data) {
-      setCart(data.map(i => ({
-        id: i.branch_product_id, name: i.branch_products?.products?.name,
-        price: i.price, originalPrice: i.price, qty: i.quantity,
-        preventOutOfStock: i.branch_products?.products?.prevent_out_of_stock_sale ?? false,
-        autoUpdateStock: i.branch_products?.products?.auto_update_stock ?? true
-      })))
+      setCart(data.map(i => ({ id: i.branch_product_id, name: i.branch_products?.products?.name, price: i.price, originalPrice: i.price, qty: i.quantity, preventOutOfStock: i.branch_products?.products?.prevent_out_of_stock_sale ?? false, autoUpdateStock: i.branch_products?.products?.auto_update_stock ?? true })))
     }
   }
 
@@ -382,7 +377,16 @@ export default function POS() {
     setHoldOrders(prev => prev.filter(o => o.id !== orderId))
   }
 
+  // ====== SMART CAMERA SCANNER ======
   const startScanner = async () => {
+    // අර අපි හදපු Permission Checker එක මෙතනින් කෝල් කරනවා
+    const hasPermission = await ensurePermission('camera');
+    
+    if (!hasPermission) {
+      // Permission නැත්නම් (හෝ Deny කරලා නම්) මෙතනින් එහාට යන්නේ නෑ. Error එක එන්නේ නෑ.
+      return; 
+    }
+
     if (scanRef.current) { try { await scanRef.current.stop() } catch(e) {}; scanRef.current = null }
     const html5QrCode = new Html5Qrcode("reader")
     scanRef.current = html5QrCode
@@ -391,7 +395,10 @@ export default function POS() {
         (decodedText) => { const prod = products.find(p => p.sku === decodedText); if (prod) addToCart(prod); else showToast(`Not found: ${decodedText}`, 'error'); stopScanner() },
         () => {})
       setScanner(html5QrCode)
-    } catch (err) { showToast('Camera permission required', 'error'); setScanner(null) }
+    } catch (err) { 
+      showToast('Camera Permission Error', 'error'); 
+      setScanner(null) 
+    }
   }
 
   const stopScanner = () => {
@@ -520,7 +527,6 @@ export default function POS() {
           ← Back to Products
         </button>
       )}
-      {/* Customer search bar */}
       <div className="relative mb-3" ref={customerDropdownRef}>
         <div className="flex items-center gap-2">
           <div className="relative flex-1">
@@ -538,7 +544,6 @@ export default function POS() {
             )}
           </div>
 
-          {/* CONTACT PICKER BUTTON (PROMPTS PERMISSION / OPEN POPUP) */}
           <button onClick={pickContact} className="px-3 py-2 bg-gray-200 dark:bg-gray-600 hover:bg-gray-300 dark:hover:bg-gray-500 rounded-lg transition" title="Pick Contact">
             📇
           </button>
@@ -587,7 +592,6 @@ export default function POS() {
               </button>
             </div>
 
-            {/* Quick VCF File Upload */}
             <div className="bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 p-3 rounded-xl flex items-center justify-between">
               <div className="text-xs">
                 <p className="font-bold text-blue-600 dark:text-blue-300">Import .VCF Contact File</p>
@@ -599,7 +603,6 @@ export default function POS() {
               </label>
             </div>
 
-            {/* Customers List Search */}
             <div className="space-y-2">
               <p className="text-xs font-semibold text-gray-500 dark:text-gray-400">Select Saved Customer:</p>
               <div className="max-h-52 overflow-y-auto space-y-1 pr-1 border border-gray-200 dark:border-gray-700 rounded-xl p-2">
@@ -677,7 +680,6 @@ export default function POS() {
         )}
       </div>
 
-      {/* Discount, totals, payment method, checkout */}
       <div className="flex items-center gap-2 mb-3">
         <input type="number" placeholder="Discount" className="w-24 border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-base" value={discount} onChange={e => setDiscount(Number(e.target.value))} />
         <span className="text-sm opacity-70">Discount</span>

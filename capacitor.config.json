@@ -1,0 +1,9 @@
+{
+  "appId": "com.nishadi.enterprise",
+  "appName": "Nishadi Enterprise Suite",
+  "webDir": "out",
+  "server": {
+    "url": "https://nishadi-enterprise-suite.vercel.app",
+    "cleartext": true
+  }
+}
