@@ -1,8 +1,8 @@
 'use client'
 import { useState } from 'react'
-import { useToast } from '../../context/ToastContext'
+import { useToast } from '../context/ToastContext'
 
-export default function BackupRestorePage() {
+export default function BackupRestore() {
   const { showToast } = useToast()
 
   return (
