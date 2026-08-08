@@ -72,16 +72,19 @@ export default function POS() {
     return () => window.removeEventListener('resize', checkMobile)
   }, [])
 
-  // 🔴 FIXED: Live Stock Refresh සඳහා වෙනම Function එකක්
+  // 🔴 FIXED: Ghost Items Filter & Live Stock Fetching
   const fetchProducts = async () => {
     if (!branch) return;
+    
+    // products!inner used to completely filter out soft/hard deleted products
     const { data, error } = await supabase.from('branch_products')
-      .select('id, price, stock_quantity, products(sku, name, prevent_out_of_stock_sale, auto_update_stock)')
+      .select('id, price, stock_quantity, products!inner(sku, name, prevent_out_of_stock_sale, auto_update_stock)')
       .eq('branch_id', branch)
       
     if (error) { showToast('Failed to load products', 'error'); return; }
     if (data) {
-      setProducts(data.map(p => ({
+      const validProducts = data.filter(p => p.products !== null);
+      setProducts(validProducts.map(p => ({
         id: p.id, sku: p.products?.sku, name: p.products?.name,
         price: p.price, stock: p.stock_quantity,
         preventOutOfStock: p.products?.prevent_out_of_stock_sale ?? false,
@@ -266,9 +269,30 @@ export default function POS() {
     }
 
     let cid = selectedCustomer?.id
+    
+    // 🔴 FIXED: Walk-in Customer Auto Creation Logic
     if (!cid && customerPhone) {
       const { data: nc } = await supabase.from('customers').insert({ branch_id: branch, phone: customerPhone, name: 'Cust ' + customerPhone.slice(-4) }).select().single()
       if (nc) { cid = nc.id; setCustomers(prev => [...prev, nc]); setSelectedCustomer(nc) }
+    } else if (!cid && !customerPhone) {
+      // Find or Create "Walk-in Customer"
+      const { data: walkIn } = await supabase.from('customers')
+        .select('id').eq('branch_id', branch).ilike('name', 'Walk-in Customer').maybeSingle();
+        
+      if (walkIn) {
+        cid = walkIn.id;
+      } else {
+        const { data: newWalkIn } = await supabase.from('customers')
+          .insert({ branch_id: branch, name: 'Walk-in Customer', phone: '0000000000', address: 'Walk-in' }).select().single();
+        if (newWalkIn) {
+          cid = newWalkIn.id;
+          // Sync Walk-in to Parallel Branch
+          try {
+            const { data: exPar } = await supabase.from('customers').select('id').eq('branch_id', PARALLEL_BRANCH_ID).ilike('name', 'Walk-in Customer').maybeSingle()
+            if (!exPar) await supabase.from('customers').insert({ branch_id: PARALLEL_BRANCH_ID, name: 'Walk-in Customer', phone: '0000000000', address: 'Walk-in' })
+          } catch(e) {}
+        }
+      }
     }
     
     const { data: order, error: orderError } = await supabase.from('orders').insert({
@@ -301,7 +325,6 @@ export default function POS() {
       setCart([]); setDiscount(0); setSelectedCustomer(null); setCustomerPhone(''); setCustomerSearch('')
       setPaymentMethod('cash'); setChequeNumber(''); setChequeDate(''); setBankReference(''); setCreditDueDate('')
       
-      // 🔴 REFRESH LIVE STOCK AFTER CHECKOUT
       await fetchProducts();
     }
   }
@@ -337,7 +360,6 @@ export default function POS() {
     setScanner(null)
   }
 
-  // 🔴 FIXED: NO API NEEDED. Uses Browser's Native Share functionality!
   const shareLastBill = async () => {
     if (!lastBill) return;
     try {
@@ -363,7 +385,6 @@ export default function POS() {
       const fileName = `receipt_${Date.now()}.pdf`;
       const file = new File([pdfBlob], fileName, { type: 'application/pdf' });
       
-      // Phone Native Share Dialog (Works seamlessly on Mobile Chrome/Safari)
       if (navigator.canShare && navigator.canShare({ files: [file] })) {
         await navigator.share({
           title: 'Nishadi Motors Receipt',
@@ -372,7 +393,6 @@ export default function POS() {
         });
         showToast('Receipt shared successfully!', 'success');
       } else {
-        // Fallback for Desktop/PC (Downloads the PDF and opens standard WhatsApp Web)
         const pdfUrl = URL.createObjectURL(pdfBlob);
         const a = document.createElement('a');
         a.href = pdfUrl;
@@ -480,7 +500,8 @@ export default function POS() {
   const productPanel = (
     <div className="flex flex-col space-y-3 overflow-hidden min-h-0 flex-1">
       <div className="flex gap-2">
-        <input className="flex-1 border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-base" placeholder="🔍 Search products..." value={search} onChange={e => setSearch(e.target.value)} />
+        {/* 🔴 FIXED: Changed placeholder to "I want to sell..." */}
+        <input className="flex-1 border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-base" placeholder="🔍 I want to sell..." value={search} onChange={e => setSearch(e.target.value)} />
         <button className="px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition" onClick={startScanner}><BsUpcScan size={18} /></button>
         {scanner && <button className="px-3 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition text-sm" onClick={stopScanner}>Stop</button>}
       </div>
@@ -489,20 +510,25 @@ export default function POS() {
         <div className="flex-1 flex items-center justify-center text-center opacity-50">📦 No products found.</div>
       ) : (
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 overflow-y-auto flex-1 min-h-0 pr-1">
-          {products.filter(p => p.name?.toLowerCase().includes(search.toLowerCase())).map(p => {
+          {/* 🔴 FIXED: Search by BOTH Name and SKU */}
+          {products.filter(p => p.name?.toLowerCase().includes(search.toLowerCase()) || p.sku?.toLowerCase().includes(search.toLowerCase())).map(p => {
             const cartItem = cart.find(i => i.id === p.id)
             const inCartQty = cartItem ? cartItem.qty : 0
-            
-            // 🔴 FIXED: Live Stock Calculation
             const currentLiveStock = p.stock - inCartQty
             const isOutOfStock = currentLiveStock <= 0
 
             return (
-              <button key={p.id} className={`relative p-3 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition text-left shadow-sm ${inCartQty > 0 ? 'ring-2 ring-blue-500 bg-blue-50 dark:bg-gray-700' : ''} ${isOutOfStock && p.preventOutOfStock ? 'opacity-60 cursor-not-allowed' : ''}`} onClick={() => addToCart(p)}>
+              <button key={p.id} className={`relative p-3 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition text-left shadow-sm flex flex-col justify-between ${inCartQty > 0 ? 'ring-2 ring-blue-500 bg-blue-50 dark:bg-gray-700' : ''} ${isOutOfStock && p.preventOutOfStock ? 'opacity-60 cursor-not-allowed' : ''}`} onClick={() => addToCart(p)}>
                 {inCartQty > 0 && <span className="absolute top-2 right-2 bg-blue-600 text-white font-extrabold text-xs px-2 py-0.5 rounded-full shadow-md">x {inCartQty}</span>}
                 {isOutOfStock && <span className={`absolute top-2 left-2 text-white text-[10px] font-bold px-1.5 py-0.5 rounded shadow ${p.preventOutOfStock ? 'bg-red-600' : 'bg-orange-500'}`}>Out of Stock</span>}
-                <div className="font-semibold text-sm sm:text-base mt-2 line-clamp-2">{p.name}</div>
-                <div className="text-xs sm:text-sm opacity-70 mt-1">{currency}{p.price} | Live Stock: <span className={isOutOfStock ? "text-red-500 font-bold" : "font-bold text-blue-600"}>{currentLiveStock}</span></div>
+                
+                <div>
+                  <div className="font-semibold text-sm sm:text-base mt-2 line-clamp-2">{p.name}</div>
+                  {/* 🔴 FIXED: Show SKU visually under the product name */}
+                  <div className="text-[10px] sm:text-xs text-gray-500 dark:text-gray-400 mt-0.5 opacity-80">SKU: {p.sku || 'N/A'}</div>
+                </div>
+                
+                <div className="text-xs sm:text-sm opacity-70 mt-2">{currency}{p.price} | Live Stock: <span className={isOutOfStock ? "text-red-500 font-bold" : "font-bold text-blue-600"}>{currentLiveStock}</span></div>
               </button>
             )
           })}
@@ -547,14 +573,21 @@ export default function POS() {
         </div>
       </div>
 
-      {selectedCustomer && (
+      {/* 🔴 FIXED: Visual Indicator for Walk-in Customers */}
+      {selectedCustomer ? (
         <div className="mb-3 p-2 bg-gray-100 dark:bg-gray-700 rounded text-sm">
           <p className="font-bold">{selectedCustomer.name}</p>
           <p className={selectedCustomer.total_credit > 0 ? 'text-red-500 font-semibold' : ''}>Credit: {currency}{selectedCustomer.total_credit}</p>
         </div>
+      ) : (
+        !customerPhone && (
+          <div className="mb-3 p-2 bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300 rounded text-xs text-center border border-blue-100 dark:border-blue-800/50">
+            ℹ️ No customer selected. Sale will be saved as <b>Walk-in Customer</b>.
+          </div>
+        )
       )}
 
-      <div className="flex-1 overflow-y-auto space-y-1.5 mb-3 pr-1">
+      <div className="flex-1 overflow-y-auto space-y-1.5 mb-3 pr-1 mt-2">
         {cart.length === 0 ? <div className="text-center text-sm opacity-50 py-8">🛒 No items in cart</div> : (
           cart.map((item, idx) => (
             <div key={idx} className="flex justify-between items-center bg-gray-100 dark:bg-gray-700 p-2.5 rounded-lg text-sm sm:text-base border border-gray-200 dark:border-gray-600">
