@@ -1,7 +1,7 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  output: 'export', // Next.js App එක Static HTML/JS බවට Export කරයි
-  images: { unoptimized: true },
-}
+  reactStrictMode: true,
+  // වෙනත් settings තියෙනවා නම් ඒවත් තියන්න, හැබැයි output: 'export' අනිවාර්යයෙන් මකන්න.
+};
 
-module.exports = nextConfig
+module.exports = nextConfig;
