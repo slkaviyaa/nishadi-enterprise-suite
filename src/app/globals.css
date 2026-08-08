@@ -1,34 +1,9 @@
-@import "tailwindcss";
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
 
-:root {
-  --bg: #ffffff;
-  --text: #111827;
-  --card: #f9fafb;
-  --border: #e5e7eb;
-  --primary: #2563eb;
-  --sidebar: #1e293b;
-  --sidebar-text: #f1f5f9;
-}
-
-html.dark {
-  --bg: #0f172a;
-  --text: #e2e8f0;
-  --card: #1e293b;
-  --border: #334155;
-  --primary: #3b82f6;
-  --sidebar: #020617;
-  --sidebar-text: #cbd5e1;
-}
-
-body {
-  background-color: var(--bg);
-  color: var(--text);
-}
-
-
-/* Prevent iOS zoom on input focus */
-@media screen and (max-width: 768px) {
-  input, select, textarea, button {
-    font-size: 16px !important;
+@layer base {
+  body {
+    @apply bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-white transition-colors duration-200;
   }
 }

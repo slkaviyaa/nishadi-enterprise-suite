@@ -10,7 +10,10 @@ export default function Login() {
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
   const router = useRouter()
-  const { showToast } = useToast()
+  
+  // 🟢 Safe fallback දමා ඇත (useToast එක null වුණත් ක්‍රෑෂ් නොවීමට)
+  const toastContext = useToast()
+  const showToast = toastContext?.showToast || ((msg) => console.log(msg))
 
   const handleLogin = async (e) => {
     e.preventDefault()
