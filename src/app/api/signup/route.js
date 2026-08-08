@@ -58,7 +58,11 @@ export async function POST(request) {
       permissions: ['all']
     })
 
-  if (staffError) return Response.json({ error: staffError.message }, { status: 400 })
+  // 🔴 ROLLBACK SYSTEM: Staff table එකට සේව් වෙන්න බැරි වුණොත්, Auth එකට ගිය ඊමේල් එක instantly delete කරන්න
+  if (staffError) {
+    await supabaseAdmin.auth.admin.deleteUser(authUser.user.id)
+    return Response.json({ error: `Signup failed: ${staffError.message}. Please try again.` }, { status: 400 })
+  }
 
   return Response.json({ success: true, message: 'Account created! You can now sign in.' })
 }

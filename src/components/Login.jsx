@@ -6,12 +6,11 @@ import { useToast } from '../context/ToastContext'
 import Link from 'next/link'
 
 export default function Login() {
-  const [email, setEmail] = useState('')
+  const [identifier, setIdentifier] = useState('') // Email එක හෝ Username එක
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
   const router = useRouter()
   
-  // 🟢 Safe fallback දමා ඇත (useToast එක null වුණත් ක්‍රෑෂ් නොවීමට)
   const toastContext = useToast()
   const showToast = toastContext?.showToast || ((msg) => console.log(msg))
 
@@ -19,13 +18,19 @@ export default function Login() {
     e.preventDefault()
     setLoading(true)
 
+    // 💡 Username ට්‍රික් එක: යූසර් @ ගැහුවේ නැත්නම්, අපි @nishadi.com එකතු කරනවා
+    let loginEmail = identifier.trim().toLowerCase()
+    if (!loginEmail.includes('@')) {
+      loginEmail = `${loginEmail}@nishadi.com`
+    }
+
     const { data, error } = await supabase.auth.signInWithPassword({
-      email: email.trim(),
+      email: loginEmail,
       password,
     })
     
     if (error) {
-      showToast(error.message || 'Invalid Email or Password', 'error')
+      showToast('Invalid Username/Email or Password', 'error')
     } else {
       showToast('Welcome to Nishadi Motors POS!', 'success')
       router.push('/pos')
@@ -52,15 +57,15 @@ export default function Login() {
         <form onSubmit={handleLogin} className="space-y-6">
           <div>
             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-              Email Address
+              Username or Email
             </label>
             <input
-              type="email"
+              type="text"
               required
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
+              value={identifier}
+              onChange={(e) => setIdentifier(e.target.value)}
               className="w-full px-4 py-3 rounded-xl border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 outline-none transition-all"
-              placeholder="admin@nishadimotors.com"
+              placeholder="e.g. admin or admin@nishadimotors.com"
             />
           </div>
 
