@@ -360,7 +360,7 @@ export default function Inventory() {
   }
 
   return (
-    <div className="space-y-6 text-gray-900 dark:text-gray-100 p-4">
+    <div className="space-y-6 text-gray-900 dark:text-white dark:text-gray-100 p-4">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
         <h2 className="text-2xl font-bold dark:text-white">Inventory</h2>
         <div className="flex gap-2 items-center flex-wrap">
@@ -496,9 +496,9 @@ export default function Inventory() {
       </div>
 
       {/* Main Products Table */}
-      <div className="overflow-x-auto rounded-lg border border-gray-200 dark:border-gray-700">
+      <div className="overflow-x-auto rounded-lg border border-gray-200 dark:border-gray-700 ">
         <table className="w-full min-w-[800px] divide-y divide-gray-200 dark:divide-gray-700">
-          <thead className="bg-gray-50 dark:bg-gray-800">
+          <thead className="bg-gray-50 dark:bg-gray-900 dark:bg-gray-800">
             <tr>
               <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">SKU</th>
               <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Name</th>
@@ -514,7 +514,7 @@ export default function Inventory() {
               <tr><td colSpan={7} className="px-4 py-8 text-center text-sm text-gray-500 dark:text-gray-400">📦 No products found. Import an Excel file or add manually.</td></tr>
             ) : (
               items.map(i => (
-                <tr key={i.id} className="hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
+                <tr key={i.id} className="hover:bg-gray-50 dark:bg-gray-900 dark:hover:bg-gray-700 transition-colors">
                   <td className="px-4 py-3 text-sm font-mono">{i.products?.sku}</td>
                   <td className="px-4 py-3 text-sm font-medium">{i.products?.name}</td>
                   <td className="px-4 py-3 text-sm text-gray-500 dark:text-gray-400">{i.product_variants?.variant_value || '—'}</td>

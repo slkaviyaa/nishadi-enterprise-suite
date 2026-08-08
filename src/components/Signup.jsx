@@ -73,8 +73,8 @@ export default function Signup() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-600 via-purple-600 to-pink-500 p-4">
       <div className="absolute inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute -top-40 -left-40 w-80 h-80 bg-white/10 rounded-full blur-3xl animate-pulse" />
-        <div className="absolute -bottom-40 -right-40 w-96 h-96 bg-white/10 rounded-full blur-3xl animate-pulse delay-1000" />
+        <div className="absolute -top-40 -left-40 w-80 h-80 bg-white dark:bg-gray-800/10 rounded-full blur-3xl animate-pulse" />
+        <div className="absolute -bottom-40 -right-40 w-96 h-96 bg-white dark:bg-gray-800/10 rounded-full blur-3xl animate-pulse delay-1000" />
       </div>
 
       <div className="relative w-full max-w-md">
@@ -82,9 +82,9 @@ export default function Signup() {
           ← Back to Login
         </Link>
 
-        <div className="bg-white/10 backdrop-blur-xl border border-white/20 rounded-3xl shadow-2xl p-8">
+        <div className="bg-white dark:bg-gray-800/10 backdrop-blur-xl border border-white/20 rounded-3xl shadow-2xl p-8">
           <div className="text-center mb-6">
-            <div className="w-20 h-20 bg-white/20 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg">
+            <div className="w-20 h-20 bg-white dark:bg-gray-800/20 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg">
               <span className="text-4xl">🚛</span>
             </div>
             <h1 className="text-3xl font-bold text-white">Create Account</h1>
@@ -97,18 +97,18 @@ export default function Signup() {
           </div>}
 
           <div className="space-y-4">
-            <input type="text" placeholder="Invite Code (Security Key)" className="w-full bg-white/10 border border-white/20 rounded-xl px-4 py-3 text-white placeholder-white/60 focus:outline-none focus:border-white/50 transition"
+            <input type="text" placeholder="Invite Code (Security Key)" className="w-full bg-white dark:bg-gray-800/10 border border-white/20 rounded-xl px-4 py-3 text-white placeholder-white/60 focus:outline-none focus:border-white/50 transition"
               value={inviteCode} onChange={e => setInviteCode(e.target.value)} required />
 
             <form onSubmit={handleEmailSignup} className="space-y-4">
-              <input type="text" placeholder="Display Name" className="w-full bg-white/10 border border-white/20 rounded-xl px-4 py-3 text-white placeholder-white/60 focus:outline-none focus:border-white/50 transition"
+              <input type="text" placeholder="Display Name" className="w-full bg-white dark:bg-gray-800/10 border border-white/20 rounded-xl px-4 py-3 text-white placeholder-white/60 focus:outline-none focus:border-white/50 transition"
                 value={displayName} onChange={e => setDisplayName(e.target.value)} required />
-              <input type="email" placeholder="Email address" className="w-full bg-white/10 border border-white/20 rounded-xl px-4 py-3 text-white placeholder-white/60 focus:outline-none focus:border-white/50 transition"
+              <input type="email" placeholder="Email address" className="w-full bg-white dark:bg-gray-800/10 border border-white/20 rounded-xl px-4 py-3 text-white placeholder-white/60 focus:outline-none focus:border-white/50 transition"
                 value={email} onChange={e => setEmail(e.target.value)} required />
-              <input type="password" placeholder="Password" className="w-full bg-white/10 border border-white/20 rounded-xl px-4 py-3 text-white placeholder-white/60 focus:outline-none focus:border-white/50 transition"
+              <input type="password" placeholder="Password" className="w-full bg-white dark:bg-gray-800/10 border border-white/20 rounded-xl px-4 py-3 text-white placeholder-white/60 focus:outline-none focus:border-white/50 transition"
                 value={password} onChange={e => setPassword(e.target.value)} required />
               <button type="submit" disabled={loading}
-                className="w-full bg-white text-purple-700 font-bold py-3 rounded-xl hover:bg-gray-100 transition disabled:opacity-50">
+                className="w-full bg-white dark:bg-gray-800 text-purple-700 font-bold py-3 rounded-xl hover:bg-gray-100 dark:bg-gray-700 transition disabled:opacity-50">
                 {loading ? 'Creating...' : 'Sign up with Email'}
               </button>
             </form>
@@ -120,7 +120,7 @@ export default function Signup() {
             </div>
 
             <button onClick={handleGoogleSignup}
-              className="w-full flex items-center justify-center gap-2 bg-white text-gray-700 font-medium py-3 rounded-xl hover:bg-gray-100 transition">
+              className="w-full flex items-center justify-center gap-2 bg-white dark:bg-gray-800 text-gray-700 font-medium py-3 rounded-xl hover:bg-gray-100 dark:bg-gray-700 transition">
               <FcGoogle size={20} />
               Sign up with Google
             </button>

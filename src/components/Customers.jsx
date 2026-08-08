@@ -27,7 +27,7 @@ export default function Customers() {
   }
 
   return (
-    <div className="space-y-6 text-gray-900 dark:text-gray-100">
+    <div className="space-y-6 text-gray-900 dark:text-white dark:text-gray-100">
       <div className="flex justify-between items-center">
         <h2 className="text-2xl font-bold dark:text-white">Customer Management</h2>
         <button onClick={exportvCard} className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition text-sm">
@@ -49,7 +49,7 @@ export default function Customers() {
               <tr><td colSpan={4} className="p-4 text-center opacity-50">No customers found.</td></tr>
             ) : (
               customers.map(c => (
-                <tr key={c.id} className="border-b border-gray-100 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700 transition">
+                <tr key={c.id} className="border-b border-gray-100 dark:border-gray-700 hover:bg-gray-50 dark:bg-gray-900 dark:hover:bg-gray-700 transition">
                   <td className="p-3 font-medium">{c.name}</td>
                   <td className="p-3">{c.phone}</td>
                   <td className={`p-3 font-semibold ${c.total_credit > 0 ? 'text-red-500' : ''}`}>Rs. {c.total_credit.toLocaleString()}</td>

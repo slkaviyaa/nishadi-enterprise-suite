@@ -36,11 +36,7 @@ export default function POS() {
   const [bankReference, setBankReference] = useState('')
   const [creditDueDate, setCreditDueDate] = useState('')
   
-  const [printModal, setPrintModal] = useState(false)
-  const [printContent, setPrintContent] = useState('')
   const [lastBill, setLastBill] = useState(null)
-  const iframeRef = useRef(null)
-
   const [isPrinting, setIsPrinting] = useState(false)
   const [printerSize, setPrinterSize] = useState(32)
 
@@ -72,14 +68,14 @@ export default function POS() {
     return () => window.removeEventListener('resize', checkMobile)
   }, [])
 
-  // 🔴 FIXED: Ghost Items Filter & Live Stock Fetching
+  // Ghost Items Filter 
   const fetchProducts = async () => {
     if (!branch) return;
     
-    // products!inner used to completely filter out soft/hard deleted products
     const { data, error } = await supabase.from('branch_products')
       .select('id, price, stock_quantity, products!inner(sku, name, prevent_out_of_stock_sale, auto_update_stock)')
       .eq('branch_id', branch)
+      .is('products.deleted_at', null) 
       
     if (error) { showToast('Failed to load products', 'error'); return; }
     if (data) {
@@ -260,7 +256,6 @@ export default function POS() {
   const checkout = async (status = 'completed') => {
     if (cart.length === 0) return
     
-    // Live Database Stock Check Before Checkout
     for (const item of cart) {
       if (item.preventOutOfStock) {
         const { data: bp } = await supabase.from('branch_products').select('stock_quantity').eq('id', item.id).single()
@@ -270,12 +265,10 @@ export default function POS() {
 
     let cid = selectedCustomer?.id
     
-    // 🔴 FIXED: Walk-in Customer Auto Creation Logic
     if (!cid && customerPhone) {
       const { data: nc } = await supabase.from('customers').insert({ branch_id: branch, phone: customerPhone, name: 'Cust ' + customerPhone.slice(-4) }).select().single()
       if (nc) { cid = nc.id; setCustomers(prev => [...prev, nc]); setSelectedCustomer(nc) }
     } else if (!cid && !customerPhone) {
-      // Find or Create "Walk-in Customer"
       const { data: walkIn } = await supabase.from('customers')
         .select('id').eq('branch_id', branch).ilike('name', 'Walk-in Customer').maybeSingle();
         
@@ -286,7 +279,6 @@ export default function POS() {
           .insert({ branch_id: branch, name: 'Walk-in Customer', phone: '0000000000', address: 'Walk-in' }).select().single();
         if (newWalkIn) {
           cid = newWalkIn.id;
-          // Sync Walk-in to Parallel Branch
           try {
             const { data: exPar } = await supabase.from('customers').select('id').eq('branch_id', PARALLEL_BRANCH_ID).ilike('name', 'Walk-in Customer').maybeSingle()
             if (!exPar) await supabase.from('customers').insert({ branch_id: PARALLEL_BRANCH_ID, name: 'Walk-in Customer', phone: '0000000000', address: 'Walk-in' })
@@ -497,20 +489,19 @@ export default function POS() {
     }
   };
 
+  // 🔴 FIXED: Added Card styling (bg-white dark:bg-gray-800 rounded-xl shadow-2xl p-4) to match the billing side
   const productPanel = (
-    <div className="flex flex-col space-y-3 overflow-hidden min-h-0 flex-1">
+    <div className="bg-white dark:bg-gray-800 text-gray-900 dark:text-white rounded-xl shadow-2xl p-4 flex flex-col space-y-3 overflow-hidden min-h-0 flex-1">
       <div className="flex gap-2">
-        {/* 🔴 FIXED: Changed placeholder to "I want to sell..." */}
-        <input className="flex-1 border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-base" placeholder="🔍 I want to sell..." value={search} onChange={e => setSearch(e.target.value)} />
+        <input className="flex-1 border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-gray-50 dark:bg-gray-900 dark:bg-gray-700 text-gray-900 dark:text-white text-base" placeholder="🔍 I want to sell..." value={search} onChange={e => setSearch(e.target.value)} />
         <button className="px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition" onClick={startScanner}><BsUpcScan size={18} /></button>
         {scanner && <button className="px-3 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition text-sm" onClick={stopScanner}>Stop</button>}
       </div>
       <div id="reader" className={`w-full ${scanner ? '' : 'hidden'}`} />
       {products.length === 0 ? (
-        <div className="flex-1 flex items-center justify-center text-center opacity-50">📦 No products found.</div>
+        <div className="flex-1 flex items-center justify-center text-center opacity-50 dark:text-gray-400">📦 No products found.</div>
       ) : (
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 overflow-y-auto flex-1 min-h-0 pr-1">
-          {/* 🔴 FIXED: Search by BOTH Name and SKU */}
           {products.filter(p => p.name?.toLowerCase().includes(search.toLowerCase()) || p.sku?.toLowerCase().includes(search.toLowerCase())).map(p => {
             const cartItem = cart.find(i => i.id === p.id)
             const inCartQty = cartItem ? cartItem.qty : 0
@@ -518,29 +509,28 @@ export default function POS() {
             const isOutOfStock = currentLiveStock <= 0
 
             return (
-              <button key={p.id} className={`relative p-3 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition text-left shadow-sm flex flex-col justify-between ${inCartQty > 0 ? 'ring-2 ring-blue-500 bg-blue-50 dark:bg-gray-700' : ''} ${isOutOfStock && p.preventOutOfStock ? 'opacity-60 cursor-not-allowed' : ''}`} onClick={() => addToCart(p)}>
+              <button key={p.id} className={`relative p-3 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-100 dark:bg-gray-700 dark:hover:bg-gray-700 transition text-left shadow-sm flex flex-col justify-between ${inCartQty > 0 ? 'ring-2 ring-blue-500 bg-blue-50 dark:bg-gray-700' : 'bg-white dark:bg-gray-800 text-gray-900 dark:text-white '} ${isOutOfStock && p.preventOutOfStock ? 'opacity-60 cursor-not-allowed' : ''}`} onClick={() => addToCart(p)}>
                 {inCartQty > 0 && <span className="absolute top-2 right-2 bg-blue-600 text-white font-extrabold text-xs px-2 py-0.5 rounded-full shadow-md">x {inCartQty}</span>}
                 {isOutOfStock && <span className={`absolute top-2 left-2 text-white text-[10px] font-bold px-1.5 py-0.5 rounded shadow ${p.preventOutOfStock ? 'bg-red-600' : 'bg-orange-500'}`}>Out of Stock</span>}
                 
                 <div>
                   <div className="font-semibold text-sm sm:text-base mt-2 line-clamp-2">{p.name}</div>
-                  {/* 🔴 FIXED: Show SKU visually under the product name */}
                   <div className="text-[10px] sm:text-xs text-gray-500 dark:text-gray-400 mt-0.5 opacity-80">SKU: {p.sku || 'N/A'}</div>
                 </div>
                 
-                <div className="text-xs sm:text-sm opacity-70 mt-2">{currency}{p.price} | Live Stock: <span className={isOutOfStock ? "text-red-500 font-bold" : "font-bold text-blue-600"}>{currentLiveStock}</span></div>
+                <div className="text-xs sm:text-sm opacity-70 mt-2">{currency}{p.price} | Live Stock: <span className={isOutOfStock ? "text-red-500 font-bold" : "font-bold text-blue-400"}>{currentLiveStock}</span></div>
               </button>
             )
           })}
         </div>
       )}
       {holdOrders.length > 0 && (
-        <div className="bg-gray-100 dark:bg-gray-800 rounded-lg p-3 mt-2">
-          <h4 className="font-medium text-sm mb-2">📌 Hold Orders ({holdOrders.length})</h4>
+        <div className="bg-gray-100 dark:bg-gray-700 rounded-lg p-3 mt-2 border border-gray-200 dark:border-gray-700 dark:border-gray-600">
+          <h4 className="font-medium text-sm mb-2 text-gray-900 dark:text-white ">📌 Hold Orders ({holdOrders.length})</h4>
           <div className="space-y-2 max-h-40 overflow-y-auto">
             {holdOrders.map(o => (
-              <div key={o.id} className="flex items-center justify-between bg-white dark:bg-gray-700 p-2 rounded text-sm">
-                <div><span className="font-semibold">#{o.id.slice(0,6)}</span><span className="ml-2">{currency}{o.total}</span>{o.hold_note && <span className="ml-2 text-xs opacity-70">({o.hold_note})</span>}</div>
+              <div key={o.id} className="flex items-center justify-between bg-white dark:bg-gray-800 p-2 rounded border border-gray-200 dark:border-gray-700 dark:border-gray-600 text-sm">
+                <div className="text-gray-900 dark:text-white "><span className="font-semibold">#{o.id.slice(0,6)}</span><span className="ml-2">{currency}{o.total}</span>{o.hold_note && <span className="ml-2 text-xs opacity-70">({o.hold_note})</span>}</div>
                 <div className="flex gap-1">
                   <button className="px-2 py-1 bg-blue-500 text-white rounded text-xs hover:bg-blue-600 transition" onClick={() => loadHold(o.id)}>Load</button>
                   <button className="px-2 py-1 bg-red-500 text-white rounded text-xs hover:bg-red-600 transition" onClick={() => deleteHoldOrder(o.id)}>Del</button>
@@ -560,22 +550,21 @@ export default function POS() {
       <div className="relative mb-3" ref={customerDropdownRef}>
         <div className="flex items-center gap-2">
           <div className="relative flex-1">
-            <input type="text" className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-base" placeholder="🔍 Search customer..." value={customerSearch} onChange={(e) => { setCustomerSearch(e.target.value); setShowCustomerDropdown(true) }} onFocus={() => setShowCustomerDropdown(true)} />
+            <input type="text" className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-gray-50 dark:bg-gray-900 dark:bg-gray-700 text-gray-900 dark:text-white text-base" placeholder="🔍 Search customer..." value={customerSearch} onChange={(e) => { setCustomerSearch(e.target.value); setShowCustomerDropdown(true) }} onFocus={() => setShowCustomerDropdown(true)} />
             {customerSearch && filteredCustomers.length > 0 && showCustomerDropdown && (
-              <ul className="absolute z-50 mt-1 w-full bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg shadow-lg max-h-48 overflow-y-auto">
-                {filteredCustomers.map(c => <li key={c.id} className="px-3 py-2 hover:bg-gray-100 dark:hover:bg-gray-600 cursor-pointer text-sm" onClick={() => selectCustomerFromSearch(c)}><span className="font-medium">{c.name}</span> <span className="text-xs opacity-70">({c.phone})</span></li>)}
+              <ul className="absolute z-50 mt-1 w-full bg-white dark:bg-gray-800 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg shadow-lg max-h-48 overflow-y-auto text-gray-900 dark:text-white ">
+                {filteredCustomers.map(c => <li key={c.id} className="px-3 py-2 hover:bg-gray-100 dark:bg-gray-700 dark:hover:bg-gray-600 cursor-pointer text-sm" onClick={() => selectCustomerFromSearch(c)}><span className="font-medium">{c.name}</span> <span className="text-xs opacity-70">({c.phone})</span></li>)}
               </ul>
             )}
           </div>
-          <button onClick={pickContact} className="px-3 py-2 bg-gray-200 dark:bg-gray-600 rounded-lg transition" title="Pick Contact">📇</button>
-          <button className="px-3 py-2 bg-gray-200 dark:bg-gray-600 rounded-lg transition" onClick={() => setNewCustomerForm(true)}>➕</button>
+          <button onClick={pickContact} className="px-3 py-2 bg-gray-200 dark:bg-gray-700 rounded-lg transition text-gray-900 dark:text-white border border-gray-300 dark:border-gray-600 " title="Pick Contact">📇</button>
+          <button className="px-3 py-2 bg-gray-200 dark:bg-gray-700 rounded-lg transition text-gray-900 dark:text-white border border-gray-300 dark:border-gray-600 " onClick={() => setNewCustomerForm(true)}>➕</button>
           {selectedCustomer && <button onClick={clearCustomer} className="px-2 py-2 text-red-500 text-sm">✕</button>}
         </div>
       </div>
 
-      {/* 🔴 FIXED: Visual Indicator for Walk-in Customers */}
       {selectedCustomer ? (
-        <div className="mb-3 p-2 bg-gray-100 dark:bg-gray-700 rounded text-sm">
+        <div className="mb-3 p-2 bg-gray-100 dark:bg-gray-700 border border-gray-200 dark:border-gray-700 dark:border-gray-600 rounded text-sm text-gray-900 dark:text-white ">
           <p className="font-bold">{selectedCustomer.name}</p>
           <p className={selectedCustomer.total_credit > 0 ? 'text-red-500 font-semibold' : ''}>Credit: {currency}{selectedCustomer.total_credit}</p>
         </div>
@@ -588,14 +577,14 @@ export default function POS() {
       )}
 
       <div className="flex-1 overflow-y-auto space-y-1.5 mb-3 pr-1 mt-2">
-        {cart.length === 0 ? <div className="text-center text-sm opacity-50 py-8">🛒 No items in cart</div> : (
+        {cart.length === 0 ? <div className="text-center text-sm opacity-50 dark:text-gray-400 py-8">🛒 No items in cart</div> : (
           cart.map((item, idx) => (
-            <div key={idx} className="flex justify-between items-center bg-gray-100 dark:bg-gray-700 p-2.5 rounded-lg text-sm sm:text-base border border-gray-200 dark:border-gray-600">
+            <div key={idx} className="flex justify-between items-center bg-gray-50 dark:bg-gray-900 dark:bg-gray-700 p-2.5 rounded-lg text-sm sm:text-base border border-gray-200 dark:border-gray-700 dark:border-gray-600 text-gray-900 dark:text-white ">
               <div className="flex-1 pr-2"><span className="font-medium block line-clamp-1">{item.name}</span></div>
               <div className="flex items-center gap-1">
-                <button className="px-2 py-0.5 bg-gray-300 dark:bg-gray-600 rounded font-bold" onClick={() => updateCartQty(item.id, item.qty - 1)}>−</button>
+                <button className="px-2 py-0.5 bg-gray-200 dark:bg-gray-600 rounded font-bold" onClick={() => updateCartQty(item.id, item.qty - 1)}>−</button>
                 <span className="w-8 text-center font-semibold text-sm">{item.qty}</span>
-                <button className="px-2 py-0.5 bg-gray-300 dark:bg-gray-600 rounded font-bold" onClick={() => updateCartQty(item.id, item.qty + 1)}>+</button>
+                <button className="px-2 py-0.5 bg-gray-200 dark:bg-gray-600 rounded font-bold" onClick={() => updateCartQty(item.id, item.qty + 1)}>+</button>
               </div>
               <span className="ml-2 font-bold w-20 text-right">{currency}{(item.price * item.qty).toFixed(2)}</span>
               <button onClick={() => openEditModal(item)} className="ml-2 p-1 text-blue-500 hover:bg-blue-100 dark:hover:bg-gray-600 rounded"><FiEdit3 size={16} /></button>
@@ -606,37 +595,40 @@ export default function POS() {
       </div>
 
       <div className="flex items-center gap-2 mb-3">
-        <input type="number" placeholder="Discount" className="w-24 border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-base" value={discount} onChange={e => setDiscount(Number(e.target.value))} />
+        <input type="number" placeholder="Discount" className="w-24 border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-gray-50 dark:bg-gray-900 dark:bg-gray-700 text-gray-900 dark:text-white text-base" value={discount} onChange={e => setDiscount(Number(e.target.value))} />
         <span className="text-sm opacity-70">Discount</span>
       </div>
 
-      <div className="bg-gray-100 dark:bg-gray-700 rounded-lg p-3 mb-4 text-sm sm:text-base">
+      <div className="bg-gray-50 dark:bg-gray-900 dark:bg-gray-700 border border-gray-200 dark:border-gray-700 dark:border-gray-600 rounded-lg p-3 mb-4 text-sm sm:text-base text-gray-900 dark:text-white ">
         <div className="flex justify-between"><span>Subtotal</span> <span>{currency}{subtotal.toFixed(2)}</span></div>
         {taxEnabled && <div className="flex justify-between"><span>Tax ({taxRate}%)</span> <span>{currency}{taxAmount.toFixed(2)}</span></div>}
-        {discount > 0 && <div className="flex justify-between text-red-500"><span>Discount</span> <span>-{currency}{discount.toFixed(2)}</span></div>}
-        <div className="flex justify-between text-lg sm:text-xl font-bold mt-1 pt-1 border-t border-gray-300 dark:border-gray-500"><span>Total</span> <span>{currency}{final.toFixed(2)}</span></div>
+        {discount > 0 && <div className="flex justify-between text-red-500 dark:text-red-400"><span>Discount</span> <span>-{currency}{discount.toFixed(2)}</span></div>}
+        <div className="flex justify-between text-lg sm:text-xl font-bold mt-1 pt-1 border-t border-gray-300 dark:border-gray-600 dark:border-gray-500"><span>Total</span> <span>{currency}{final.toFixed(2)}</span></div>
       </div>
       
       <div className="mb-4">
-        <div className="text-sm font-medium mb-2">💳 Payment Method</div>
+        <div className="text-sm font-medium mb-2 text-gray-900 dark:text-white ">💳 Payment Method</div>
         <div className="grid grid-cols-3 gap-2">
-          {[{ method: 'cash', label: 'Cash', color: 'bg-green-600' }, { method: 'card', label: 'Card', color: 'bg-blue-600' }, { method: 'cheque', label: 'Cheque', color: 'bg-purple-600' }, { method: 'credit', label: 'Credit', color: 'bg-orange-500' }, { method: 'bank_transfer', label: 'Bank', color: 'bg-teal-600' }].map(pm => (
-            <button key={pm.method} className={`px-3 py-2 rounded-lg text-sm sm:text-base font-medium transition-all hover:scale-105 ${paymentMethod === pm.method ? `${pm.color} text-white` : 'bg-gray-200 dark:bg-gray-600 text-gray-700 dark:text-gray-300'}`} onClick={() => setPaymentMethod(pm.method)}>{pm.label}</button>
+          {[{ method: 'cash', label: 'Cash', color: 'bg-green-600 dark:bg-green-700' }, { method: 'card', label: 'Card', color: 'bg-blue-600 dark:bg-blue-700' }, { method: 'cheque', label: 'Cheque', color: 'bg-purple-600 dark:bg-purple-700' }, { method: 'credit', label: 'Credit', color: 'bg-orange-500 dark:bg-orange-600' }, { method: 'bank_transfer', label: 'Bank', color: 'bg-teal-600 dark:bg-teal-700' }].map(pm => (
+            <button key={pm.method} className={`px-3 py-2 rounded-lg text-sm sm:text-base font-medium transition-all hover:scale-105 ${paymentMethod === pm.method ? `${pm.color} text-white` : 'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 border border-transparent dark:border-gray-600'}`} onClick={() => setPaymentMethod(pm.method)}>{pm.label}</button>
           ))}
         </div>
       </div>
 
       {paymentMethod === 'cheque' && (
         <div className="grid grid-cols-2 gap-2 mb-3">
-          <input type="text" className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm" placeholder="Cheque Number" value={chequeNumber} onChange={e => setChequeNumber(e.target.value)} />
-          <input type="date" className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm" value={chequeDate} onChange={e => setChequeDate(e.target.value)} />
+          <input type="text" className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-gray-50 dark:bg-gray-900 dark:bg-gray-700 text-gray-900 dark:text-white text-sm" placeholder="Cheque Number" value={chequeNumber} onChange={e => setChequeNumber(e.target.value)} />
+          <input type="date" className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-gray-50 dark:bg-gray-900 dark:bg-gray-700 text-gray-900 dark:text-white text-sm" value={chequeDate} onChange={e => setChequeDate(e.target.value)} />
         </div>
       )}
       {paymentMethod === 'bank_transfer' && (
-        <div className="mb-3"><input type="text" className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm" placeholder="Bank Reference" value={bankReference} onChange={e => setBankReference(e.target.value)} /></div>
+        <div className="mb-3"><input type="text" className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-gray-50 dark:bg-gray-900 dark:bg-gray-700 text-gray-900 dark:text-white text-sm" placeholder="Bank Reference" value={bankReference} onChange={e => setBankReference(e.target.value)} /></div>
       )}
       {paymentMethod === 'credit' && (
-        <div className="mb-3"><label className="block text-sm font-medium mb-1">Due Date</label><input type="date" className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm" value={creditDueDate} onChange={e => setCreditDueDate(e.target.value)} /></div>
+        <div className="mb-3">
+          <label className="block text-sm font-medium mb-1 text-gray-900 dark:text-white ">Due Date</label>
+          <input type="date" className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-gray-50 dark:bg-gray-900 dark:bg-gray-700 text-gray-900 dark:text-white text-sm" value={creditDueDate} onChange={e => setCreditDueDate(e.target.value)} />
+        </div>
       )}
 
       <div className="flex gap-2 mt-auto">
@@ -650,35 +642,25 @@ export default function POS() {
             <BsWhatsapp size={18} /> Share Receipt
           </button>
           
-          <div className="flex-1 flex gap-2">
-            <select 
-              className="bg-gray-100 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg px-2 text-xs font-bold text-gray-700 dark:text-white"
-              value={printerSize}
-              onChange={(e) => setPrinterSize(Number(e.target.value))}
-            >
-              <option value={32}>58mm</option>
-              <option value={48}>80mm</option>
-            </select>
-            <button onClick={printViaWebBluetooth} disabled={isPrinting} className="flex-1 px-2 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center justify-center gap-2 font-bold shadow-md disabled:opacity-50">
-              {isPrinting ? 'Printing...' : <><FiBluetooth size={18} /> BT Print</>}
-            </button>
-          </div>
+          <button onClick={printViaWebBluetooth} disabled={isPrinting} className="flex-1 px-4 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center justify-center gap-2 font-bold shadow-md disabled:opacity-50">
+            {isPrinting ? 'Printing...' : '🖨️ Print'}
+          </button>
         </div>
       )}
     </div>
   )
 
   return (
-    <>
+    <div className="text-gray-900 dark:text-white h-full">
       {!isMobile && (
         <div className="flex gap-4 h-[calc(100vh-120px)]">
-          <div className="w-2/5">{productPanel}</div>
-          <div className="w-3/5">{billingTerminal}</div>
+          <div className="w-2/5 flex flex-col">{productPanel}</div>
+          <div className="w-3/5 flex flex-col">{billingTerminal}</div>
         </div>
       )}
       {isMobile && mobileView === 'products' && (
         <div className="flex flex-col h-[calc(100vh-120px)]">
-          <div className="flex-1 overflow-hidden">{productPanel}</div>
+          <div className="flex-1 overflow-hidden flex flex-col">{productPanel}</div>
           <div className="p-3 flex-shrink-0">
             <button className="w-full py-4 bg-blue-600 text-white rounded-xl font-bold text-lg" onClick={() => setMobileView('billing')}>🛒 Go to Counter ({totalItemCount})</button>
           </div>
@@ -686,27 +668,28 @@ export default function POS() {
       )}
       {isMobile && mobileView === 'billing' && <div className="flex flex-col h-[calc(100vh-120px)]">{billingTerminal}</div>}
 
+      {/* Modals - Updated for Dark Mode */}
       {editModalOpen && selectedCartItem && (
         <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
-          <div className="bg-white dark:bg-gray-800 rounded-2xl w-full max-w-md p-6 space-y-4 shadow-2xl">
-            <div className="flex justify-between items-start border-b pb-3">
+          <div className="bg-white dark:bg-gray-800 text-gray-900 dark:text-white rounded-2xl w-full max-w-md p-6 space-y-4 shadow-2xl border border-transparent dark:border-gray-700">
+            <div className="flex justify-between items-start border-b border-gray-200 dark:border-gray-700 pb-3">
               <h3 className="text-lg font-bold">{selectedCartItem.name}</h3>
-              <button onClick={() => setEditModalOpen(false)}><FiX size={20} /></button>
+              <button onClick={() => setEditModalOpen(false)} className="hover:text-red-500"><FiX size={20} /></button>
             </div>
             <div>
               <label className="block text-xs font-semibold mb-1">Selling Price ({currency})</label>
-              <input type="number" value={editPrice} onChange={(e) => setEditPrice(e.target.value)} className="w-full border rounded-xl px-4 py-2.5 font-bold" />
+              <input type="number" value={editPrice} onChange={(e) => setEditPrice(e.target.value)} className="w-full border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-900 dark:bg-gray-700 text-gray-900 dark:text-white rounded-xl px-4 py-2.5 font-bold" />
             </div>
             <div>
               <label className="block text-xs font-semibold mb-1">Quantity</label>
               <div className="flex items-center gap-3">
-                <button type="button" onClick={() => setEditQty(Math.max(1, editQty - 1))} className="p-3 bg-red-100 text-red-600 rounded-xl font-bold"><FiMinus size={18} /></button>
-                <input type="number" min="1" value={editQty} onChange={(e) => setEditQty(Math.max(1, Number(e.target.value)))} className="flex-1 border rounded-xl py-2.5 text-center font-bold text-lg" />
-                <button type="button" onClick={() => setEditQty(editQty + 1)} className="p-3 bg-green-100 text-green-600 rounded-xl font-bold"><FiPlus size={18} /></button>
+                <button type="button" onClick={() => setEditQty(Math.max(1, editQty - 1))} className="p-3 bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400 rounded-xl font-bold"><FiMinus size={18} /></button>
+                <input type="number" min="1" value={editQty} onChange={(e) => setEditQty(Math.max(1, Number(e.target.value)))} className="flex-1 border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-900 dark:bg-gray-700 text-gray-900 dark:text-white rounded-xl py-2.5 text-center font-bold text-lg" />
+                <button type="button" onClick={() => setEditQty(editQty + 1)} className="p-3 bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400 rounded-xl font-bold"><FiPlus size={18} /></button>
               </div>
             </div>
             <div className="flex gap-2 pt-2">
-              <button type="button" onClick={handleUpdateCartItem} className="flex-1 bg-blue-600 text-white font-bold py-3 rounded-xl">Update Item</button>
+              <button type="button" onClick={handleUpdateCartItem} className="flex-1 bg-blue-600 text-white font-bold py-3 rounded-xl hover:bg-blue-700">Update Item</button>
             </div>
           </div>
         </div>
@@ -714,13 +697,13 @@ export default function POS() {
 
       {customerModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-          <div className="bg-white dark:bg-gray-800 rounded-2xl w-full max-w-md p-6 shadow-2xl space-y-4">
-            <div className="flex justify-between items-center border-b pb-3">
+          <div className="bg-white dark:bg-gray-800 text-gray-900 dark:text-white rounded-2xl w-full max-w-md p-6 shadow-2xl space-y-4 border border-transparent dark:border-gray-700">
+            <div className="flex justify-between items-center border-b border-gray-200 dark:border-gray-700 pb-3">
               <h3 className="text-lg font-bold">📇 Import Contact</h3>
-              <button onClick={() => setCustomerModal(false)}><FiX size={20} /></button>
+              <button onClick={() => setCustomerModal(false)} className="hover:text-red-500"><FiX size={20} /></button>
             </div>
             <p className="text-sm opacity-80 text-center">ඔබගේ දුරකථනයේ Web Contacts API සඳහා සහාය නොදක්වයි. කරුණාකර VCF ෆයිල් එකක් හරහා අප්ලෝඩ් කරන්න.</p>
-            <label className="bg-blue-600 text-white text-sm font-bold px-4 py-3 rounded-lg cursor-pointer flex items-center justify-center gap-2">
+            <label className="bg-blue-600 text-white text-sm font-bold px-4 py-3 rounded-lg cursor-pointer flex items-center justify-center gap-2 hover:bg-blue-700">
               <FiUpload /> VCF / VCard එකක් තෝරන්න
               <input type="file" accept=".vcf,.vcard" onChange={handleVcfUpload} className="hidden" />
             </label>
@@ -729,18 +712,18 @@ export default function POS() {
       )}
 
       {newCustomerForm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl p-6 w-11/12 max-w-md">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="bg-white dark:bg-gray-800 text-gray-900 dark:text-white rounded-xl shadow-2xl p-6 w-full max-w-md border border-transparent dark:border-gray-700">
             <h3 className="font-bold text-lg mb-4">New Customer</h3>
-            <input type="text" className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 mb-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-white" placeholder="Name" value={newCustName} onChange={e => setNewCustName(e.target.value)} />
-            <input type="tel" className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 mb-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-white" placeholder="Phone" value={customerPhone} onChange={e => setCustomerPhone(e.target.value)} />
+            <input type="text" className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 mb-2 bg-gray-50 dark:bg-gray-900 dark:bg-gray-700 text-gray-900 dark:text-white " placeholder="Name" value={newCustName} onChange={e => setNewCustName(e.target.value)} />
+            <input type="tel" className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 mb-4 bg-gray-50 dark:bg-gray-900 dark:bg-gray-700 text-gray-900 dark:text-white " placeholder="Phone" value={customerPhone} onChange={e => setCustomerPhone(e.target.value)} />
             <div className="flex gap-2">
-              <button className="flex-1 px-4 py-3 bg-green-600 text-white rounded-lg font-medium" onClick={createNewCustomer}>Create</button>
-              <button className="flex-1 px-4 py-3 bg-red-500 text-white rounded-lg font-medium" onClick={() => setNewCustomerForm(false)}>Cancel</button>
+              <button className="flex-1 px-4 py-3 bg-green-600 hover:bg-green-700 text-white rounded-lg font-medium" onClick={createNewCustomer}>Create</button>
+              <button className="flex-1 px-4 py-3 bg-red-500 hover:bg-red-600 text-white rounded-lg font-medium" onClick={() => setNewCustomerForm(false)}>Cancel</button>
             </div>
           </div>
         </div>
       )}
-    </>
+    </div>
   )
 }

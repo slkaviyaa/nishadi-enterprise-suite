@@ -56,37 +56,37 @@ export default function BillSettings() {
           {/* Text Fields */}
           <div>
             <label className="label text-gray-700 dark:text-gray-200">Header Text</label>
-            <input type="text" className="input input-bordered w-full bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+            <input type="text" className="input input-bordered w-full bg-white dark:bg-gray-800 dark:bg-gray-700 text-gray-900 dark:text-white "
               value={form.header_text} onChange={e => handleChange('header_text', e.target.value)} placeholder="Nishadi Motors" />
           </div>
           <div>
             <label className="label text-gray-700 dark:text-gray-200">Footer Text</label>
-            <input type="text" className="input input-bordered w-full bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+            <input type="text" className="input input-bordered w-full bg-white dark:bg-gray-800 dark:bg-gray-700 text-gray-900 dark:text-white "
               value={form.footer_text} onChange={e => handleChange('footer_text', e.target.value)} placeholder="Thank you!" />
           </div>
           <div>
             <label className="label text-gray-700 dark:text-gray-200">Logo URL</label>
-            <input type="text" className="input input-bordered w-full bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+            <input type="text" className="input input-bordered w-full bg-white dark:bg-gray-800 dark:bg-gray-700 text-gray-900 dark:text-white "
               value={form.logo_url} onChange={e => handleChange('logo_url', e.target.value)} placeholder="https://..." />
           </div>
           <div>
             <label className="label text-gray-700 dark:text-gray-200">Bill Number Prefix</label>
-            <input type="text" className="input input-bordered w-full bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+            <input type="text" className="input input-bordered w-full bg-white dark:bg-gray-800 dark:bg-gray-700 text-gray-900 dark:text-white "
               value={form.bill_number_prefix} onChange={e => handleChange('bill_number_prefix', e.target.value)} placeholder="INV-" />
           </div>
           <div>
             <label className="label text-gray-700 dark:text-gray-200">Tax Number (VAT/GST)</label>
-            <input type="text" className="input input-bordered w-full bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+            <input type="text" className="input input-bordered w-full bg-white dark:bg-gray-800 dark:bg-gray-700 text-gray-900 dark:text-white "
               value={form.tax_number} onChange={e => handleChange('tax_number', e.target.value)} placeholder="VAT123456" />
           </div>
           <div>
             <label className="label text-gray-700 dark:text-gray-200">Contact Info</label>
-            <input type="text" className="input input-bordered w-full bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+            <input type="text" className="input input-bordered w-full bg-white dark:bg-gray-800 dark:bg-gray-700 text-gray-900 dark:text-white "
               value={form.contact_info} onChange={e => handleChange('contact_info', e.target.value)} placeholder="Phone, Email" />
           </div>
           <div>
             <label className="label text-gray-700 dark:text-gray-200">Printer IP (Thermal)</label>
-            <input type="text" className="input input-bordered w-full bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+            <input type="text" className="input input-bordered w-full bg-white dark:bg-gray-800 dark:bg-gray-700 text-gray-900 dark:text-white "
               value={form.printer_ip} onChange={e => handleChange('printer_ip', e.target.value)} placeholder="192.168.1.100" />
           </div>
 
@@ -99,7 +99,7 @@ export default function BillSettings() {
           {/* Paper Size */}
           <div>
             <label className="label text-gray-700 dark:text-gray-200">Paper Size</label>
-            <select className="select select-bordered w-full bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+            <select className="select select-bordered w-full bg-white dark:bg-gray-800 dark:bg-gray-700 text-gray-900 dark:text-white "
               value={form.paper_size} onChange={e => handleChange('paper_size', e.target.value)}>
               <option value="80mm">80mm Thermal</option>
               <option value="A4">A4</option>

@@ -54,14 +54,14 @@ export default function Login() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-600 via-purple-600 to-pink-500 p-4">
       <div className="absolute inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute -top-40 -left-40 w-80 h-80 bg-white/10 rounded-full blur-3xl animate-pulse" />
-        <div className="absolute -bottom-40 -right-40 w-96 h-96 bg-white/10 rounded-full blur-3xl animate-pulse delay-1000" />
+        <div className="absolute -top-40 -left-40 w-80 h-80 bg-white dark:bg-gray-800/10 rounded-full blur-3xl animate-pulse" />
+        <div className="absolute -bottom-40 -right-40 w-96 h-96 bg-white dark:bg-gray-800/10 rounded-full blur-3xl animate-pulse delay-1000" />
       </div>
 
       <div className="relative w-full max-w-md">
-        <div className="bg-white/10 backdrop-blur-xl border border-white/20 rounded-3xl shadow-2xl p-8 animate-bounceIn">
+        <div className="bg-white dark:bg-gray-800/10 backdrop-blur-xl border border-white/20 rounded-3xl shadow-2xl p-8 animate-bounceIn">
           <div className="text-center mb-8">
-            <div className="w-20 h-20 bg-white/20 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg">
+            <div className="w-20 h-20 bg-white dark:bg-gray-800/20 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg">
               <span className="text-4xl">🚛</span>
             </div>
             <h1 className="text-3xl font-bold text-white">Nishadi Motors</h1>
@@ -76,7 +76,7 @@ export default function Login() {
             <input
               type="text"
               placeholder="Email or Username"
-              className="w-full bg-white/10 border border-white/20 rounded-xl px-4 py-3 text-white placeholder-white/60 focus:outline-none focus:border-white/50 transition"
+              className="w-full bg-white dark:bg-gray-800/10 border border-white/20 rounded-xl px-4 py-3 text-white placeholder-white/60 focus:outline-none focus:border-white/50 transition"
               value={identifier}
               onChange={e => setIdentifier(e.target.value)}
               required
@@ -84,7 +84,7 @@ export default function Login() {
             <input
               type="password"
               placeholder="Password"
-              className="w-full bg-white/10 border border-white/20 rounded-xl px-4 py-3 text-white placeholder-white/60 focus:outline-none focus:border-white/50 transition"
+              className="w-full bg-white dark:bg-gray-800/10 border border-white/20 rounded-xl px-4 py-3 text-white placeholder-white/60 focus:outline-none focus:border-white/50 transition"
               value={password}
               onChange={e => setPassword(e.target.value)}
               required
@@ -92,7 +92,7 @@ export default function Login() {
             <button
               type="submit"
               disabled={loading}
-              className="w-full bg-white text-purple-700 font-bold py-3 rounded-xl hover:bg-gray-100 transition disabled:opacity-50"
+              className="w-full bg-white dark:bg-gray-800 text-purple-700 font-bold py-3 rounded-xl hover:bg-gray-100 dark:bg-gray-700 transition disabled:opacity-50"
             >
               {loading ? 'Signing in...' : 'Sign In'}
             </button>
@@ -107,7 +107,7 @@ export default function Login() {
           <button
             onClick={handleGoogleLogin}
             disabled={googleLoading}
-            className="w-full flex items-center justify-center gap-2 bg-white text-gray-700 font-medium py-3 rounded-xl hover:bg-gray-100 transition disabled:opacity-50"
+            className="w-full flex items-center justify-center gap-2 bg-white dark:bg-gray-800 text-gray-700 font-medium py-3 rounded-xl hover:bg-gray-100 dark:bg-gray-700 transition disabled:opacity-50"
           >
             <FcGoogle size={20} />
             {googleLoading ? 'Redirecting...' : 'Sign in with Google'}

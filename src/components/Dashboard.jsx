@@ -55,7 +55,7 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-6 animate-fadeIn">
-      <h1 className="text-3xl font-bold text-gray-900 dark:text-white">Dashboard</h1>
+      <h1 className="text-3xl font-bold text-gray-900 dark:text-white ">Dashboard</h1>
       <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="bg-blue-600 text-white rounded-xl p-4 shadow hover:scale-105 transition"><div className="text-sm text-blue-100">Today's Sales</div><div className="text-xl sm:text-2xl font-bold">{currency}{stats.sales.toLocaleString()}</div></div>
         <div className="bg-purple-600 text-white rounded-xl p-4 shadow hover:scale-105 transition"><div className="text-sm text-purple-100">Customers</div><div className="text-xl sm:text-2xl font-bold">{stats.customers}</div></div>

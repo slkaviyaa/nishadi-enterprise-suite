@@ -103,7 +103,7 @@ export default function Users() {
   if (user?.role !== 'owner') return <div className="alert alert-error">Access Denied</div>
 
   return (
-    <div className="space-y-6 text-gray-900 dark:text-gray-100">
+    <div className="space-y-6 text-gray-900 dark:text-white dark:text-gray-100">
       <div className="flex items-center justify-between">
         <h2 className="text-2xl font-bold dark:text-white">User Management</h2>
         <button
@@ -131,14 +131,14 @@ export default function Users() {
               <tr><td colSpan={5} className="p-8 text-center text-gray-400">No users found.</td></tr>
             ) : (
               users.map(u => (
-                <tr key={u.id} className="hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
+                <tr key={u.id} className="hover:bg-gray-50 dark:bg-gray-900 dark:hover:bg-gray-700 transition-colors">
                   <td className="p-4 text-sm font-medium">{u.username || u.display_name}</td>
                   <td className="p-4 text-sm">
                     <span className={`px-2 py-1 rounded-full text-xs font-medium ${
                       u.role === 'owner' ? 'bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-300' :
                       u.role === 'manager' ? 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300' :
                       u.role === 'accountant' ? 'bg-teal-100 text-teal-800 dark:bg-teal-900/30 dark:text-teal-300' :
-                      'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300'
+                      'bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200 dark:bg-gray-700 dark:text-gray-300'
                     }`}>{u.role}</span>
                   </td>
                   <td className="p-4 text-sm">{u.branch_id === '11111111-1111-1111-1111-111111111111' ? 'Main' : 'Parallel'}</td>
@@ -175,15 +175,15 @@ export default function Users() {
           <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl p-6 w-full max-w-md animate-scaleIn">
             <h3 className="font-bold text-lg mb-4">Create New User</h3>
             <div className="space-y-3">
-              <input className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-white" placeholder="Username" value={username} onChange={e => setUsername(e.target.value)} />
-              <input className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-white" type="password" placeholder="Password" value={password} onChange={e => setPassword(e.target.value)} />
-              <select className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-white" value={role} onChange={e => setRole(e.target.value)}>
+              <input className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-white dark:bg-gray-800 dark:bg-gray-700 text-gray-900 dark:text-white " placeholder="Username" value={username} onChange={e => setUsername(e.target.value)} />
+              <input className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-white dark:bg-gray-800 dark:bg-gray-700 text-gray-900 dark:text-white " type="password" placeholder="Password" value={password} onChange={e => setPassword(e.target.value)} />
+              <select className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-white dark:bg-gray-800 dark:bg-gray-700 text-gray-900 dark:text-white " value={role} onChange={e => setRole(e.target.value)}>
                 <option value="owner">Owner</option>
                 <option value="manager">Manager</option>
                 <option value="cashier">Cashier</option>
                 <option value="accountant">Accountant</option>
               </select>
-              <select className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-white" value={branchId} onChange={e => setBranchId(e.target.value)}>
+              <select className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-white dark:bg-gray-800 dark:bg-gray-700 text-gray-900 dark:text-white " value={branchId} onChange={e => setBranchId(e.target.value)}>
                 <option value="11111111-1111-1111-1111-111111111111">Main</option>
                 <option value="22222222-2222-2222-2222-222222222222">Parallel</option>
               </select>
@@ -217,26 +217,26 @@ export default function Users() {
             <h3 className="font-bold text-lg mb-4">Edit User</h3>
             <div className="space-y-3">
               <input
-                className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-white dark:bg-gray-800 dark:bg-gray-700 text-gray-900 dark:text-white "
                 placeholder="Username"
                 value={editUser.username}
                 onChange={e => setEditUser({ ...editUser, username: e.target.value })}
               />
               <input
                 type="password"
-                className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-white dark:bg-gray-800 dark:bg-gray-700 text-gray-900 dark:text-white "
                 placeholder="New Password (leave blank to keep)"
                 value={editUser.password || ''}
                 onChange={e => setEditUser({ ...editUser, password: e.target.value })}
               />
-              <select className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+              <select className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-white dark:bg-gray-800 dark:bg-gray-700 text-gray-900 dark:text-white "
                 value={editUser.role} onChange={e => setEditUser({ ...editUser, role: e.target.value })}>
                 <option value="owner">Owner</option>
                 <option value="manager">Manager</option>
                 <option value="cashier">Cashier</option>
                 <option value="accountant">Accountant</option>
               </select>
-              <select className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+              <select className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-white dark:bg-gray-800 dark:bg-gray-700 text-gray-900 dark:text-white "
                 value={editUser.branch_id} onChange={e => setEditUser({ ...editUser, branch_id: e.target.value })}>
                 <option value="11111111-1111-1111-1111-111111111111">Main</option>
                 <option value="22222222-2222-2222-2222-222222222222">Parallel</option>

@@ -8,7 +8,7 @@ import {
   FiHome, FiPackage, FiUsers, FiBarChart2, FiUserCheck, FiShoppingCart,
   FiLogOut, FiUserPlus, FiSettings, FiGrid, FiToggleLeft,
   FiPercent, FiRepeat, FiFileText, FiDollarSign, FiTruck, FiCpu, FiX,
-  FiBookOpen, FiBriefcase, FiList, FiBook
+  FiBookOpen, FiBriefcase, FiList, FiBook, FiDatabase
 } from 'react-icons/fi'
 
 export default function Sidebar({ onClose }) {
@@ -50,6 +50,9 @@ export default function Sidebar({ onClose }) {
     menu.push({ href: '/accounting/chart-of-accounts', label: 'Chart of Accounts', icon: <FiList /> })
     menu.push({ href: '/accounting/journal', label: 'Journal Entries', icon: <FiBook /> })
 
+    // 🔴 FIXED: Backup and Reset DB (Highlighted in Red)
+    menu.push({ href: '/backup-restore', label: 'Backup & Reset DB', icon: <FiDatabase />, isDanger: true })
+
     // Settings at the very end
     menu.push({ href: '/settings', label: 'Module Settings', icon: <FiToggleLeft /> })
   }
@@ -60,7 +63,7 @@ export default function Sidebar({ onClose }) {
       <div className="p-4 text-xl font-bold border-b border-[var(--border)] flex items-center justify-between">
         <span>🚛 Nishadi Motors POS</span>
         <button
-          className="lg:hidden p-1 rounded hover:bg-white/10"
+          className="lg:hidden p-1 rounded hover:bg-white dark:bg-gray-800/10"
           onClick={onClose}
         >
           <FiX size={20} />
@@ -72,7 +75,7 @@ export default function Sidebar({ onClose }) {
         <li>
           <Link
             href="/"
-            className="flex items-center gap-3 py-2 transition-all duration-300 hover:bg-white/10 rounded-lg"
+            className="flex items-center gap-3 py-2 transition-all duration-300 hover:bg-white dark:bg-gray-800/10 rounded-lg"
             onClick={onClose}
           >
             <FiGrid /> Dashboard
@@ -86,7 +89,7 @@ export default function Sidebar({ onClose }) {
           >
             <Link
               href={item.href}
-              className="flex items-center gap-3 py-2 transition-all duration-300 hover:bg-white/10 rounded-lg"
+              className={`flex items-center gap-3 py-2 transition-all duration-300 rounded-lg ${item.isDanger ? 'text-red-400 hover:bg-red-500/10' : 'hover:bg-white dark:bg-gray-800/10'}`}
               onClick={onClose}
             >
               {item.icon} {item.label}

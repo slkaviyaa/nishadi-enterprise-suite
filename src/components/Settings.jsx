@@ -45,11 +45,11 @@ export default function Settings() {
   if (user?.role !== 'owner') return <div className="alert alert-error">Access Denied</div>
 
   return (
-    <div className="space-y-8 text-gray-900 dark:text-gray-100">
+    <div className="space-y-8 text-gray-900 dark:text-white dark:text-gray-100">
       <h2 className="text-3xl font-bold dark:text-white">⚙️ Module & Business Settings</h2>
 
       {/* Feature Toggles */}
-      <div className="card bg-white dark:bg-gray-800 p-6 rounded-lg shadow border border-gray-200 dark:border-gray-700">
+      <div className="card bg-white dark:bg-gray-800 p-6 rounded-lg shadow border border-gray-200 dark:border-gray-700 ">
         <h3 className="text-lg font-semibold mb-4 dark:text-gray-200">Feature Modules</h3>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {[
@@ -62,7 +62,7 @@ export default function Settings() {
             { key: 'users_enabled', label: 'User Management' },
             { key: 'bill_settings_enabled', label: 'Bill Settings' },
           ].map(item => (
-            <label key={item.key} className="flex items-center justify-between cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700 p-2 rounded">
+            <label key={item.key} className="flex items-center justify-between cursor-pointer hover:bg-gray-100 dark:bg-gray-700 dark:hover:bg-gray-700 p-2 rounded">
               <span className="text-sm font-medium dark:text-gray-300">{item.label}</span>
               <button
                 onClick={() => update(item.key, !local[item.key])}
@@ -78,10 +78,10 @@ export default function Settings() {
       </div>
 
       {/* Tax Configuration */}
-      <div className="card bg-white dark:bg-gray-800 p-6 rounded-lg shadow border border-gray-200 dark:border-gray-700">
+      <div className="card bg-white dark:bg-gray-800 p-6 rounded-lg shadow border border-gray-200 dark:border-gray-700 ">
         <h3 className="text-lg font-semibold mb-4 dark:text-gray-200">💰 Tax Configuration</h3>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <label className="flex items-center justify-between cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700 p-2 rounded">
+          <label className="flex items-center justify-between cursor-pointer hover:bg-gray-100 dark:bg-gray-700 dark:hover:bg-gray-700 p-2 rounded">
             <span className="text-sm font-medium dark:text-gray-300">Enable Tax</span>
             <button
               onClick={() => update('tax_enabled', !local.tax_enabled)}
@@ -96,7 +96,7 @@ export default function Settings() {
             <label className="label"><span className="label-text text-sm font-medium dark:text-gray-300">Tax Rate (%)</span></label>
             <input
               type="number"
-              className="input input-bordered w-full bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+              className="input input-bordered w-full bg-white dark:bg-gray-800 dark:bg-gray-700 text-gray-900 dark:text-white "
               value={local.tax_rate}
               onChange={e => update('tax_rate', Number(e.target.value))}
               min="0" max="100" step="0.5"
@@ -106,14 +106,14 @@ export default function Settings() {
       </div>
 
       {/* Localization */}
-      <div className="card bg-white dark:bg-gray-800 p-6 rounded-lg shadow border border-gray-200 dark:border-gray-700">
+      <div className="card bg-white dark:bg-gray-800 p-6 rounded-lg shadow border border-gray-200 dark:border-gray-700 ">
         <h3 className="text-lg font-semibold mb-4 dark:text-gray-200">🌍 Localization</h3>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div className="form-control">
             <label className="label"><span className="label-text text-sm font-medium dark:text-gray-300">Currency Symbol</span></label>
             <input
               type="text"
-              className="input input-bordered w-full bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+              className="input input-bordered w-full bg-white dark:bg-gray-800 dark:bg-gray-700 text-gray-900 dark:text-white "
               value={local.currency_symbol}
               onChange={e => update('currency_symbol', e.target.value)}
               placeholder="Rs. "
@@ -122,7 +122,7 @@ export default function Settings() {
           <div className="form-control">
             <label className="label"><span className="label-text text-sm font-medium dark:text-gray-300">Theme</span></label>
             <select
-              className="select select-bordered w-full bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+              className="select select-bordered w-full bg-white dark:bg-gray-800 dark:bg-gray-700 text-gray-900 dark:text-white "
               value={local.theme}
               onChange={e => update('theme', e.target.value)}
             >
@@ -134,7 +134,7 @@ export default function Settings() {
           <div className="form-control">
             <label className="label"><span className="label-text text-sm font-medium dark:text-gray-300">Date Format</span></label>
             <select
-              className="select select-bordered w-full bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+              className="select select-bordered w-full bg-white dark:bg-gray-800 dark:bg-gray-700 text-gray-900 dark:text-white "
               value={local.date_format}
               onChange={e => update('date_format', e.target.value)}
             >
@@ -147,14 +147,14 @@ export default function Settings() {
       </div>
 
       {/* Bill / Receipt */}
-      <div className="card bg-white dark:bg-gray-800 p-6 rounded-lg shadow border border-gray-200 dark:border-gray-700">
+      <div className="card bg-white dark:bg-gray-800 p-6 rounded-lg shadow border border-gray-200 dark:border-gray-700 ">
         <h3 className="text-lg font-semibold mb-4 dark:text-gray-200">🧾 Bill / Receipt</h3>
         <div className="grid grid-cols-1 gap-4">
           <div className="form-control">
             <label className="label"><span className="label-text text-sm font-medium dark:text-gray-300">Header Text</span></label>
             <input
               type="text"
-              className="input input-bordered w-full bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+              className="input input-bordered w-full bg-white dark:bg-gray-800 dark:bg-gray-700 text-gray-900 dark:text-white "
               value={local.bill_header}
               onChange={e => update('bill_header', e.target.value)}
             />
@@ -163,7 +163,7 @@ export default function Settings() {
             <label className="label"><span className="label-text text-sm font-medium dark:text-gray-300">Footer Text</span></label>
             <input
               type="text"
-              className="input input-bordered w-full bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+              className="input input-bordered w-full bg-white dark:bg-gray-800 dark:bg-gray-700 text-gray-900 dark:text-white "
               value={local.bill_footer}
               onChange={e => update('bill_footer', e.target.value)}
             />
@@ -172,7 +172,7 @@ export default function Settings() {
             <label className="label"><span className="label-text text-sm font-medium dark:text-gray-300">Global Low‑Stock Alert</span></label>
             <input
               type="number"
-              className="input input-bordered w-full bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+              className="input input-bordered w-full bg-white dark:bg-gray-800 dark:bg-gray-700 text-gray-900 dark:text-white "
               value={local.low_stock_global}
               onChange={e => update('low_stock_global', Number(e.target.value))}
               min="0"
@@ -182,7 +182,7 @@ export default function Settings() {
             <label className="label"><span className="label-text text-sm font-medium dark:text-gray-300">🔑 Invite Code (for Signup)</span></label>
             <input
               type="text"
-              className="input input-bordered w-full bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+              className="input input-bordered w-full bg-white dark:bg-gray-800 dark:bg-gray-700 text-gray-900 dark:text-white "
               value={local.invite_code || ''}
               onChange={e => update('invite_code', e.target.value)}
               placeholder="Set a secret code"

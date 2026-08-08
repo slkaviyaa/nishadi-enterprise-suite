@@ -99,7 +99,7 @@ export default function Devices() {
   }
 
   return (
-    <div className="space-y-6 text-gray-900 dark:text-gray-100">
+    <div className="space-y-6 text-gray-900 dark:text-white dark:text-gray-100">
       <h2 className="text-2xl font-bold dark:text-white">Bluetooth Devices</h2>
 
       {message && (
