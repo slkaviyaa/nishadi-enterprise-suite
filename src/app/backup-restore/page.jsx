@@ -1,4 +1,4 @@
-import BackupRestore from '@/components/BackupRestore'
+import BackupRestore from '../../components/BackupRestore'
 
 export default function Page() {
   return <BackupRestore />
