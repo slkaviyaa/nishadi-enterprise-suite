@@ -68,7 +68,6 @@ export default function POS() {
     return () => window.removeEventListener('resize', checkMobile)
   }, [])
 
-  // Ghost Items Filter 
   const fetchProducts = async () => {
     if (!branch) return;
     
@@ -185,18 +184,50 @@ export default function POS() {
 
   const clearCustomer = () => { setSelectedCustomer(null); setCustomerPhone(''); setCustomerSearch('') }
 
+  // 🔴 UPDATE: New createNewCustomer function to catch detailed errors
   const createNewCustomer = async () => {
-    if (!newCustName || !customerPhone) { showToast('Name and Phone required', 'error'); return }
-    const { data: c, error: mainErr } = await supabase.from('customers').insert({ branch_id: branch, name: newCustName, phone: customerPhone, address: newCustAddress }).select().single()
-    if (mainErr) { showToast('Failed to create customer', 'error'); return }
     try {
-      const { data: existing } = await supabase.from('customers').select('id').eq('branch_id', PARALLEL_BRANCH_ID).eq('phone', customerPhone).maybeSingle()
-      if (!existing) await supabase.from('customers').insert({ branch_id: PARALLEL_BRANCH_ID, name: newCustName, phone: customerPhone, address: newCustAddress })
-    } catch (err) {}
-    setCustomers(prev => [...prev, c])
-    setSelectedCustomer(c)
-    setNewCustName(''); setNewCustAddress(''); setNewCustomerForm(false)
-    showToast('Customer created!')
+      if (!newCustName || !customerPhone) { 
+        showToast('Name and Phone required', 'error'); 
+        return;
+      }
+
+      if (!branch) {
+        alert("❌ Error: Branch ID එක ඇවිත් නෑ. කරුණාකර සිස්ටම් එකෙන් ලොග් අවුට් වෙලා ආයෙත් ලොග් වෙන්න.");
+        return;
+      }
+
+      const { data: c, error: mainErr } = await supabase.from('customers')
+        .insert({ 
+          branch_id: branch, 
+          name: newCustName, 
+          phone: customerPhone, 
+          address: newCustAddress || 'No Address' 
+        })
+        .select()
+        .single();
+
+      if (mainErr) {
+        // මේකෙන් Database එකේ තියෙන ඇත්තම එරර් එක පෙන්වයි!
+        alert(`🔴 DATABASE ERROR:\n\nMessage: ${mainErr.message}\nDetails: ${mainErr.details || 'N/A'}\nHint: ${mainErr.hint || 'N/A'}`);
+        return;
+      }
+
+      try {
+        const { data: existing } = await supabase.from('customers').select('id').eq('branch_id', PARALLEL_BRANCH_ID).eq('phone', customerPhone).maybeSingle()
+        if (!existing) await supabase.from('customers').insert({ branch_id: PARALLEL_BRANCH_ID, name: newCustName, phone: customerPhone, address: newCustAddress || 'No Address' })
+      } catch (err) {}
+
+      setCustomers(prev => [...prev, c])
+      setSelectedCustomer(c)
+      setNewCustName(''); 
+      setNewCustAddress(''); 
+      setNewCustomerForm(false)
+      showToast('Customer created!', 'success')
+
+    } catch (e) {
+      alert("🔴 SYSTEM ERROR:\n" + e.message);
+    }
   }
 
   const pickContact = async () => {
@@ -232,6 +263,32 @@ export default function POS() {
       setCustomerModal(true);
     }
   }
+
+  const handlePickContactForModal = async () => {
+    const supported = ('contacts' in navigator && 'ContactsManager' in window);
+    
+    if (!supported) {
+      showToast("ඔයාගේ බ්‍රවුසරය හෝ උපාංගය Contact Picker එකට සහය නොදක්වයි. කරුණාකර Mobile Phone එකක් භාවිත කරන්න.", "error");
+      return;
+    }
+
+    try {
+      const props = ['name', 'tel'];
+      const opts = { multiple: false };
+      const contacts = await navigator.contacts.select(props, opts);
+      
+      if (contacts && contacts.length > 0) {
+        const contactName = contacts[0].name ? contacts[0].name[0] : '';
+        let contactPhone = contacts[0].tel ? contacts[0].tel[0] : '';
+        contactPhone = contactPhone.replace(/[^0-9+]/g, '');
+
+        setNewCustName(contactName);
+        setCustomerPhone(contactPhone);
+      }
+    } catch (err) {
+      console.error("Contact pick error:", err);
+    }
+  };
 
   const handleVcfUpload = (e) => {
     const file = e.target.files?.[0]
@@ -489,7 +546,6 @@ export default function POS() {
     }
   };
 
-  // 🔴 FIXED: Added Card styling (bg-white dark:bg-gray-800 rounded-xl shadow-2xl p-4) to match the billing side
   const productPanel = (
     <div className="bg-white dark:bg-gray-800 text-gray-900 dark:text-white rounded-xl shadow-2xl p-4 flex flex-col space-y-3 overflow-hidden min-h-0 flex-1">
       <div className="flex gap-2">
@@ -715,6 +771,17 @@ export default function POS() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
           <div className="bg-white dark:bg-gray-800 text-gray-900 dark:text-white rounded-xl shadow-2xl p-6 w-full max-w-md border border-transparent dark:border-gray-700">
             <h3 className="font-bold text-lg mb-4">New Customer</h3>
+            
+            <div className="mb-4">
+              <button 
+                type="button" 
+                onClick={handlePickContactForModal} 
+                className="w-full py-2 bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 font-semibold rounded-lg border border-blue-300 dark:border-blue-800 hover:bg-blue-200 dark:hover:bg-blue-900/50 transition flex items-center justify-center gap-2"
+              >
+                📱 Pick from Phone Contacts
+              </button>
+            </div>
+
             <input type="text" className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 mb-2 bg-gray-50 dark:bg-gray-900 dark:bg-gray-700 text-gray-900 dark:text-white " placeholder="Name" value={newCustName} onChange={e => setNewCustName(e.target.value)} />
             <input type="tel" className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 mb-4 bg-gray-50 dark:bg-gray-900 dark:bg-gray-700 text-gray-900 dark:text-white " placeholder="Phone" value={customerPhone} onChange={e => setCustomerPhone(e.target.value)} />
             <div className="flex gap-2">
