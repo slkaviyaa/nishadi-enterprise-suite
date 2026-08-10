@@ -21,7 +21,7 @@ export default function Sidebar({ onClose }) {
 
   const menu = []
 
-  // Common modules (visible to all roles if enabled)
+  // Common modules
   if (settings?.pos_enabled !== false) menu.push({ href: '/pos', label: 'POS', icon: <FiHome /> })
   if (settings?.inventory_enabled !== false) menu.push({ href: '/inventory', label: 'Inventory', icon: <FiPackage /> })
   if (settings?.customers_enabled !== false) menu.push({ href: '/customers', label: 'Customers', icon: <FiUsers /> })
@@ -50,15 +50,12 @@ export default function Sidebar({ onClose }) {
     menu.push({ href: '/accounting/chart-of-accounts', label: 'Chart of Accounts', icon: <FiList /> })
     menu.push({ href: '/accounting/journal', label: 'Journal Entries', icon: <FiBook /> })
 
-    // 🔴 FIXED: Backup and Reset DB (Highlighted in Red)
     menu.push({ href: '/backup-restore', label: 'Backup & Reset DB', icon: <FiDatabase />, isDanger: true })
-
-    // Settings at the very end
     menu.push({ href: '/settings', label: 'Module Settings', icon: <FiToggleLeft /> })
   }
 
   return (
-    <div className="w-72 bg-[var(--sidebar)] text-[var(--sidebar-text)] flex flex-col shadow-xl h-screen">
+    <div className="w-72 bg-[var(--sidebar)] text-[var(--sidebar-text)] flex flex-col shadow-2xl h-screen fixed md:relative z-50 transition-transform duration-300">
       {/* Header with close button (mobile) */}
       <div className="p-4 text-xl font-bold border-b border-[var(--border)] flex items-center justify-between">
         <span>🚛 Nishadi Motors POS</span>

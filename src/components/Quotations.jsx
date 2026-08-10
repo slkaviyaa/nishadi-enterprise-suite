@@ -1,79 +1,164 @@
-'use client'
-import { useState, useEffect } from 'react'
-import { supabase } from '../lib/supabaseClient'
-import { useAuth } from '../context/AuthContext'
+'use client';
+
+import { useState, useEffect } from 'react';
+import { supabase } from '../lib/supabaseClient';
 
 export default function Quotations() {
-  const { branch } = useAuth()
-  const [customers, setCustomers] = useState([])
-  const [products, setProducts] = useState([])
-  const [selectedCustomer, setSelectedCustomer] = useState(null)
-  const [cart, setCart] = useState([])
-  const [validUntil, setValidUntil] = useState('')
-  const [quotes, setQuotes] = useState([])
+  const [products, setProducts] = useState([]);
+  const [customers, setCustomers] = useState([]);
+  const [selectedCustomer, setSelectedCustomer] = useState('');
+  const [quoteDate, setQuoteDate] = useState(new Date().toISOString().split('T')[0]);
+  const [validUntil, setValidUntil] = useState('');
+  const [cart, setCart] = useState([]);
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    supabase.from('customers').select('*').eq('branch_id', branch).then(({ data }) => setCustomers(data || []))
-    supabase.from('branch_products').select('id, price, products(sku, name)').eq('branch_id', branch).then(({ data }) => {
-      if (data) setProducts(data.map(p => ({ id: p.id, sku: p.products?.sku, name: p.products?.name, price: p.price })))
-    })
-    supabase.from('quotations').select('*, customers(name)').eq('branch_id', branch).order('created_at', { ascending: false }).then(({ data }) => setQuotes(data || []))
-  }, [branch])
+    fetchProducts();
+    fetchCustomers();
+  }, []);
 
-  const addToCart = (prod) => {
-    setCart(prev => {
-      const ex = prev.find(i => i.id === prod.id)
-      if (ex) return prev.map(i => i.id === prod.id ? { ...i, qty: i.qty + 1 } : i)
-      return [...prev, { ...prod, qty: 1 }]
-    })
-  }
+  const fetchProducts = async () => {
+    const { data } = await supabase.from('products').select('*');
+    if (data) setProducts(data);
+  };
 
-  const total = cart.reduce((s, i) => s + i.price * i.qty, 0)
+  const fetchCustomers = async () => {
+    const { data } = await supabase.from('customers').select('*');
+    if (data) setCustomers(data);
+  };
 
-  const createQuote = async (status = 'draft') => {
-    const { data: quote } = await supabase.from('quotations').insert({
-      branch_id: branch, customer_id: selectedCustomer?.id, total, status, valid_until: validUntil
-    }).select().single()
-    if (quote) {
-      await supabase.from('quotation_items').insert(cart.map(i => ({ quotation_id: quote.id, product_id: i.id, quantity: i.qty, price: i.price })))
-      alert('Quotation created!')
-      setCart([]); setSelectedCustomer(null); setValidUntil('')
-      supabase.from('quotations').select('*, customers(name)').eq('branch_id', branch).order('created_at', { ascending: false }).then(({ data }) => setQuotes(data || []))
+  const addToCart = (product) => {
+    setCart((prev) => {
+      const existing = prev.find((item) => item.id === product.id);
+      if (existing) {
+        return prev.map((item) =>
+          item.id === product.id ? { ...item, qty: item.qty + 1 } : item
+        );
+      }
+      return [...prev, { ...product, qty: 1 }];
+    });
+  };
+
+  const updateQty = (id, qty) => {
+    if (qty <= 0) {
+      setCart((prev) => prev.filter((item) => item.id !== id));
+    } else {
+      setCart((prev) =>
+        prev.map((item) => (item.id === id ? { ...item, qty } : item))
+      );
     }
-  }
+  };
+
+  const subtotal = cart.reduce((acc, item) => acc + (item.price || 0) * item.qty, 0);
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-      <div className="lg:col-span-2">
-        <h2 className="text-xl font-bold mb-2">Quotations</h2>
-        <select className="select select-bordered w-full mb-2" value={selectedCustomer?.id || ''} onChange={e => setSelectedCustomer(customers.find(c => c.id === e.target.value))}>
-          <option value="">Select Customer</option>
-          {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-        </select>
-        <div className="grid grid-cols-2 gap-2">
-          {products.map(p => (
-            <button key={p.id} className="btn btn-outline btn-sm h-auto py-2 flex-col" onClick={() => addToCart(p)}>
-              <span>{p.name}</span><span className="text-xs">Rs. {p.price}</span>
-            </button>
-          ))}
+    <div className="p-6 max-w-7xl mx-auto space-y-6">
+      <div className="flex justify-between items-center border-b pb-4 dark:border-gray-700">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-800 dark:text-white">Quotations (මිල ගණන් කැඳවීම්)</h1>
+          <p className="text-sm text-gray-500 dark:text-gray-400">Create & Manage Customer Quotations</p>
         </div>
-        <input type="date" className="input input-bordered w-full mt-2" value={validUntil} onChange={e => setValidUntil(e.target.value)} placeholder="Valid until" />
       </div>
-      <div>
-        <h3 className="font-bold">Cart</h3>
-        {cart.map((item, idx) => (
-          <div key={idx} className="flex justify-between text-sm">{item.name} x{item.qty} <span>Rs. {item.price * item.qty}</span></div>
-        ))}
-        <p className="font-bold mt-2">Total: Rs. {total}</p>
-        <div className="flex gap-2 mt-2">
-          <button className="btn btn-primary btn-sm" onClick={() => createQuote('draft')}>Draft</button>
-          <button className="btn btn-success btn-sm" onClick={() => createQuote('sent')}>Send</button>
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Left Side: Product Selector */}
+        <div className="lg:col-span-2 bg-white dark:bg-gray-800 p-6 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 space-y-4">
+          <h2 className="text-lg font-semibold text-gray-700 dark:text-gray-200">Select Products</h2>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-h-[500px] overflow-y-auto pr-2">
+            {products.map((p) => (
+              <div
+                key={p.id}
+                onClick={() => addToCart(p)}
+                className="flex justify-between items-center p-3 border border-gray-200 dark:border-gray-700 rounded-lg hover:border-blue-500 hover:bg-blue-50/50 dark:hover:bg-gray-700/50 cursor-pointer transition-all duration-150"
+              >
+                <div>
+                  <p className="font-semibold text-gray-800 dark:text-white">{p.name}</p>
+                  <p className="text-xs text-gray-400">SKU: {p.sku || 'N/A'}</p>
+                </div>
+                <span className="font-bold text-blue-600 dark:text-blue-400">
+                  Rs. {Number(p.price || 0).toLocaleString()}
+                </span>
+              </div>
+            ))}
+          </div>
         </div>
-        <h3 className="font-bold mt-4">Recent</h3>
-        {quotes.map(q => (
-          <div key={q.id} className="text-sm border-b py-1">#{q.id.slice(0,6)} - {q.customers?.name} - Rs. {q.total} ({q.status})</div>
-        ))}
+
+        {/* Right Side: Quotation Summary & Details */}
+        <div className="bg-white dark:bg-gray-800 p-6 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 space-y-4">
+          <h2 className="text-lg font-semibold text-gray-700 dark:text-gray-200">Quotation Details</h2>
+
+          <div className="space-y-3">
+            <div>
+              <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Customer</label>
+              <select
+                value={selectedCustomer}
+                onChange={(e) => setSelectedCustomer(e.target.value)}
+                className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-700 dark:text-white focus:ring-2 focus:ring-blue-500 outline-none"
+              >
+                <option value="">Select Customer...</option>
+                {customers.map((c) => (
+                  <option key={c.id} value={c.id}>{c.name} ({c.phone || 'No phone'})</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Date</label>
+                <input
+                  type="date"
+                  value={quoteDate}
+                  onChange={(e) => setQuoteDate(e.target.value)}
+                  className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-700 dark:text-white outline-none"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Valid Until</label>
+                <input
+                  type="date"
+                  value={validUntil}
+                  onChange={(e) => setValidUntil(e.target.value)}
+                  className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-700 dark:text-white outline-none"
+                />
+              </div>
+            </div>
+          </div>
+
+          <div className="border-t pt-4 dark:border-gray-700 space-y-2 max-h-[220px] overflow-y-auto">
+            <p className="text-xs font-semibold text-gray-500 uppercase">Selected Items</p>
+            {cart.length === 0 ? (
+              <p className="text-xs text-gray-400 py-4 text-center">No items added to quotation</p>
+            ) : (
+              cart.map((item) => (
+                <div key={item.id} className="flex justify-between items-center text-sm py-1 border-b dark:border-gray-700">
+                  <div className="truncate max-w-[140px]">
+                    <p className="font-medium text-gray-800 dark:text-white truncate">{item.name}</p>
+                    <p className="text-xs text-gray-400">Rs. {Number(item.price).toLocaleString()}</p>
+                  </div>
+                  <div className="flex items-center space-x-2">
+                    <button onClick={() => updateQty(item.id, item.qty - 1)} className="px-2 py-0.5 bg-gray-200 dark:bg-gray-700 rounded text-xs">-</button>
+                    <span className="font-semibold">{item.qty}</span>
+                    <button onClick={() => updateQty(item.id, item.qty + 1)} className="px-2 py-0.5 bg-gray-200 dark:bg-gray-700 rounded text-xs">+</button>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+
+          <div className="border-t pt-4 dark:border-gray-700 space-y-2">
+            <div className="flex justify-between font-bold text-lg text-gray-800 dark:text-white">
+              <span>Total:</span>
+              <span>Rs. {subtotal.toLocaleString()}</span>
+            </div>
+            <button
+              disabled={cart.length === 0}
+              className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-gray-300 text-white font-semibold py-2.5 rounded-lg transition-colors shadow-sm"
+            >
+              Generate Quotation
+            </button>
+          </div>
+        </div>
       </div>
     </div>
-  )
+  );
 }

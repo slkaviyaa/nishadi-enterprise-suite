@@ -13,8 +13,8 @@ export default function Inventory() {
   const [error, setError] = useState('')
 
   // Edit Product States
-  const [editId, setEditId] = useState(null) // branch_products id
-  const [editProductId, setEditProductId] = useState(null) // products id
+  const [editId, setEditId] = useState(null)
+  const [editProductId, setEditProductId] = useState(null)
   const [editName, setEditName] = useState('')
   const [editSku, setEditSku] = useState('')
   const [editCategory, setEditCategory] = useState('')
@@ -106,18 +106,13 @@ export default function Inventory() {
 
   const handleFileSelect = (e) => setSelectedFile(e.target.files[0])
 
-  // SMART HELPER: Case & Symbol Flexible Header Matcher for Excel Import
   const getColumnValue = (row, possibleNames) => {
     if (!row) return null
-
-    // 1. Direct exact key match
     for (const name of possibleNames) {
       if (row[name] !== undefined && row[name] !== null && String(row[name]).trim() !== '') {
         return String(row[name]).trim()
       }
     }
-
-    // 2. Case-insensitive and space/underscore flexible match
     const rowKeys = Object.keys(row)
     for (const target of possibleNames) {
       const cleanTarget = target.toLowerCase().replace(/[^a-z0-9]/g, '')
@@ -146,14 +141,11 @@ export default function Inventory() {
       let importedCount = 0
       for (const row of rows) {
         try {
-          // 1. Dedicated Search for Item Name / Description
           const itemName = getColumnValue(row, [
             'Item_Name', 'Item Name', 'Product Name', 'ProductName', 
             'Item Description', 'Item_Description', 'Description', 'Particulars', 
             'Name', 'item name', 'item_name'
           ])
-
-          // 2. Dedicated Search for SKU / Item Code
           const itemSKU = getColumnValue(row, [
             'Item_SKU', 'Item SKU', 'SKU', 'sku', 
             'Item Code', 'Item_Code', 'Code', 'code', 
@@ -164,24 +156,16 @@ export default function Inventory() {
 
           const finalName = itemName || itemSKU
           const finalSKU = itemSKU || finalName.replace(/\s+/g, '_').toUpperCase()
-
           const category = getColumnValue(row, ['Category', 'category', 'Product Category']) || null
           const barcode = getColumnValue(row, ['Item_Barcode', 'Barcode', 'barcode']) || null
 
-          // Upsert product into `products` table (Name and SKU updated correctly)
           const { data: prod } = await supabase.from('products')
-            .upsert({ 
-              sku: finalSKU, 
-              name: finalName, 
-              category, 
-              barcode 
-            }, { onConflict: 'sku' })
+            .upsert({ sku: finalSKU, name: finalName, category, barcode }, { onConflict: 'sku' })
             .select('id')
             .single()
 
           if (!prod) continue
 
-          // Variant handling
           const subItemName = getColumnValue(row, ['SubItem_Name', 'Variant Name', 'SubItem Name', 'Variant'])
           let variantId = null
           if (subItemName) {
@@ -202,23 +186,16 @@ export default function Inventory() {
           const cost = Number(getColumnValue(row, ['Cost_Price_SubItem', 'Cost', 'Cost Price', 'Purchase Price', 'CostPrice']) || 0)
           const stock = Number(getColumnValue(row, ['Stock_Count_SubItem', 'Stock', 'Quantity', 'Qty', 'Stock_Count']) || 0)
 
-          const query = supabase.from('branch_products')
-            .select('id')
-            .eq('branch_id', branch)
-            .eq('product_id', prod.id)
-
+          const query = supabase.from('branch_products').select('id').eq('branch_id', branch).eq('product_id', prod.id)
           if (variantId) query.eq('variant_id', variantId)
           else query.is('variant_id', null)
 
           const { data: existing } = await query.maybeSingle()
 
           if (existing) {
-            await supabase.from('branch_products')
-              .update({ price, cost_price: cost, stock_quantity: stock })
-              .eq('id', existing.id)
+            await supabase.from('branch_products').update({ price, cost_price: cost, stock_quantity: stock }).eq('id', existing.id)
           } else {
-            await supabase.from('branch_products')
-              .insert({ branch_id: branch, product_id: prod.id, variant_id: variantId, price, cost_price: cost, stock_quantity: stock, is_active: true })
+            await supabase.from('branch_products').insert({ branch_id: branch, product_id: prod.id, variant_id: variantId, price, cost_price: cost, stock_quantity: stock, is_active: true })
           }
           importedCount++
         } catch (err) {
@@ -240,7 +217,6 @@ export default function Inventory() {
     } 
   }
 
-  // Start Edit & populate Checkboxes
   const startEdit = (item) => { 
     setEditId(item.id)
     setEditProductId(item.products?.id)
@@ -250,8 +226,6 @@ export default function Inventory() {
     setEditPrice(item.price || 0)
     setEditCost(item.cost_price || 0)
     setEditStock(item.stock_quantity || 0)
-
-    // Load checkbox values
     setEditTrackProfit(item.products?.track_profit ?? true)
     setEditLowStockAlerts(item.products?.low_stock_alerts ?? true)
     setEditAutoUpdateStock(item.products?.auto_update_stock ?? true)
@@ -261,30 +235,16 @@ export default function Inventory() {
     setEditAddTax(item.products?.add_tax ?? false)
   }
 
-  // Save Edit Function with Checkboxes
   const saveEdit = async () => { 
     try {
       if (editProductId) {
         await supabase.from('products').update({
-          name: editName,
-          sku: editSku,
-          category: editCategory,
-          track_profit: editTrackProfit,
-          low_stock_alerts: editLowStockAlerts,
-          auto_update_stock: editAutoUpdateStock,
-          prevent_out_of_stock_sale: editPreventOutOfStock,
-          has_barcode: editHasBarcode,
-          track_expiry: editTrackExpiry,
-          add_tax: editAddTax
+          name: editName, sku: editSku, category: editCategory,
+          track_profit: editTrackProfit, low_stock_alerts: editLowStockAlerts, auto_update_stock: editAutoUpdateStock,
+          prevent_out_of_stock_sale: editPreventOutOfStock, has_barcode: editHasBarcode, track_expiry: editTrackExpiry, add_tax: editAddTax
         }).eq('id', editProductId)
       }
-
-      await supabase.from('branch_products').update({ 
-        price: Number(editPrice), 
-        cost_price: Number(editCost), 
-        stock_quantity: Number(editStock) 
-      }).eq('id', editId)
-
+      await supabase.from('branch_products').update({ price: Number(editPrice), cost_price: Number(editCost), stock_quantity: Number(editStock) }).eq('id', editId)
       setEditId(null)
       loadItems()
     } catch (err) {
@@ -306,38 +266,15 @@ export default function Inventory() {
 
   const loadMovement = async () => {
     if (!fromDate || !toDate) return
-    const { data: products } = await supabase
-      .from('branch_products')
-      .select('id, stock_quantity, product_id, products(name, sku)')
-      .eq('branch_id', branch)
-      .eq('is_active', true)
-
+    const { data: products } = await supabase.from('branch_products').select('id, stock_quantity, product_id, products(name, sku)').eq('branch_id', branch).eq('is_active', true)
     if (!products) return
-
     let result = await Promise.all(products.map(async (p) => {
-      const { data: addedData } = await supabase
-        .from('inventory_logs')
-        .select('quantity')
-        .eq('branch_id', branch)
-        .eq('product_id', p.product_id)
-        .eq('change_type', 'add')
-        .gte('created_at', fromDate)
-        .lte('created_at', toDate)
+      const { data: addedData } = await supabase.from('inventory_logs').select('quantity').eq('branch_id', branch).eq('product_id', p.product_id).eq('change_type', 'add').gte('created_at', fromDate).lte('created_at', toDate)
       const added = addedData?.reduce((sum, log) => sum + log.quantity, 0) || 0
-
-      const { data: soldData } = await supabase
-        .from('inventory_logs')
-        .select('quantity')
-        .eq('branch_id', branch)
-        .eq('product_id', p.product_id)
-        .eq('change_type', 'sold')
-        .gte('created_at', fromDate)
-        .lte('created_at', toDate)
+      const { data: soldData } = await supabase.from('inventory_logs').select('quantity').eq('branch_id', branch).eq('product_id', p.product_id).eq('change_type', 'sold').gte('created_at', fromDate).lte('created_at', toDate)
       const sold = soldData?.reduce((sum, log) => sum + Math.abs(log.quantity), 0) || 0
-
       return { sku: p.products?.sku, name: p.products?.name, added, sold, balance: p.stock_quantity }
     }))
-
     result = result.filter(r => r.added > 0 || r.sold > 0)
     setMovement(result)
     setShowMovement(true)
@@ -361,20 +298,23 @@ export default function Inventory() {
 
   return (
     <div className="space-y-6 text-gray-900 dark:text-white dark:text-gray-100 p-4">
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
+      {/* 🔴 FIXED: Header is now responsive for mobile using flex-wrap and full width inputs */}
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
         <h2 className="text-2xl font-bold dark:text-white">Inventory</h2>
-        <div className="flex gap-2 items-center flex-wrap">
-          <input type="file" accept=".xlsx, .xls, .csv" onChange={handleFileSelect} className="file-input file-input-bordered file-input-sm" disabled={importing} />
-          <button className="btn btn-primary btn-sm" onClick={handleImport} disabled={!selectedFile || importing}>{importing ? '⏳ Importing...' : '📥 Import Excel'}</button>
-          <button className="btn btn-sm" onClick={exportToExcel}>📤 Export Excel</button>
-          <button className="btn btn-ghost btn-sm" onClick={loadItems}>🔄</button>
+        <div className="flex flex-col sm:flex-row gap-2 w-full md:w-auto items-stretch sm:items-center">
+          <input type="file" accept=".xlsx, .xls, .csv" onChange={handleFileSelect} className="file-input file-input-bordered file-input-sm w-full sm:w-auto" disabled={importing} />
+          <div className="flex gap-2 w-full sm:w-auto">
+            <button className="btn btn-primary btn-sm flex-1 sm:flex-none" onClick={handleImport} disabled={!selectedFile || importing}>{importing ? '⏳ Importing...' : '📥 Import'}</button>
+            <button className="btn btn-sm flex-1 sm:flex-none" onClick={exportToExcel}>📤 Export</button>
+            <button className="btn btn-ghost btn-sm" onClick={loadItems}>🔄</button>
+          </div>
         </div>
       </div>
 
       {message && <div className={`alert ${message.includes('completed') ? 'alert-success' : 'alert-info'}`}>{message}</div>}
       {error && <div className="alert alert-error">{error}</div>}
 
-      {/* MANAGE ITEM MODAL WITH CHECKBOXES */}
+      {/* MANAGE ITEM MODAL */}
       {editId && (
         <div className="modal modal-open">
           <div className="modal-box max-w-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white border border-gray-200 dark:border-gray-700 rounded-2xl p-6">
@@ -382,18 +322,15 @@ export default function Inventory() {
               <h3 className="font-bold text-lg text-blue-600 dark:text-blue-400">MANAGE ITEM</h3>
               <button className="btn btn-sm btn-circle btn-ghost" onClick={() => setEditId(null)}>✕</button>
             </div>
-
             <div className="space-y-3 max-h-[70vh] overflow-y-auto pr-1">
               <div>
                 <label className="text-xs font-semibold opacity-70">Item Name *</label>
                 <input className="input input-bordered w-full font-semibold" value={editName} onChange={e => setEditName(e.target.value)} />
               </div>
-
               <div>
                 <label className="text-xs font-semibold opacity-70">Variant Name / SKU</label>
                 <input className="input input-bordered w-full font-semibold" value={editSku} onChange={e => setEditSku(e.target.value)} placeholder="Variant Name" />
               </div>
-
               <div className="grid grid-cols-2 gap-2">
                 <div>
                   <label className="text-xs font-semibold opacity-70">Selling Price *</label>
@@ -404,54 +341,43 @@ export default function Inventory() {
                   <input type="number" className="input input-bordered w-full" value={editCost} onChange={e => setEditCost(e.target.value)} />
                 </div>
               </div>
-
               <div>
                 <label className="text-xs font-semibold opacity-70">Stock Available</label>
                 <input type="number" className="input input-bordered w-full font-bold" value={editStock} onChange={e => setEditStock(e.target.value)} />
               </div>
-
-              {/* CHECKBOXES SECTION */}
               <div className="border-t border-gray-200 dark:border-gray-700 pt-3 space-y-2">
                 <div className="flex items-center gap-2">
                   <input type="checkbox" id="edit_track_profit" checked={editTrackProfit} onChange={e => setEditTrackProfit(e.target.checked)} className="checkbox checkbox-sm checkbox-primary" />
                   <label htmlFor="edit_track_profit" className="text-sm cursor-pointer">Track Profit?</label>
                 </div>
-
                 <div className="flex items-center gap-2">
                   <input type="checkbox" id="edit_low_stock" checked={editLowStockAlerts} onChange={e => setEditLowStockAlerts(e.target.checked)} className="checkbox checkbox-sm checkbox-primary" />
                   <label htmlFor="edit_low_stock" className="text-sm cursor-pointer">Low stock alerts?</label>
                 </div>
-
                 <div className="flex items-center gap-2">
                   <input type="checkbox" id="edit_auto_update" checked={editAutoUpdateStock} onChange={e => setEditAutoUpdateStock(e.target.checked)} className="checkbox checkbox-sm checkbox-primary" />
                   <label htmlFor="edit_auto_update" className="text-sm cursor-pointer">Auto-update stock on item sales</label>
                 </div>
-
-                {/* PREVENT OUT OF STOCK CHECKBOX */}
                 <div className="flex items-center gap-2 p-2 bg-blue-50 dark:bg-blue-900/30 rounded-lg border border-blue-200 dark:border-blue-800">
                   <input type="checkbox" id="edit_prevent_stock" checked={editPreventOutOfStock} onChange={e => setEditPreventOutOfStock(e.target.checked)} className="checkbox checkbox-sm checkbox-primary" />
                   <label htmlFor="edit_prevent_stock" className="text-sm font-bold text-blue-700 dark:text-blue-300 cursor-pointer">
                     🔒 Prevent item sale when out of stock?
                   </label>
                 </div>
-
                 <div className="flex items-center gap-2">
                   <input type="checkbox" id="edit_barcode" checked={editHasBarcode} onChange={e => setEditHasBarcode(e.target.checked)} className="checkbox checkbox-sm checkbox-primary" />
                   <label htmlFor="edit_barcode" className="text-sm cursor-pointer">Barcode?</label>
                 </div>
-
                 <div className="flex items-center gap-2">
                   <input type="checkbox" id="edit_expiry" checked={editTrackExpiry} onChange={e => setEditTrackExpiry(e.target.checked)} className="checkbox checkbox-sm checkbox-primary" />
                   <label htmlFor="edit_expiry" className="text-sm cursor-pointer">Track Expiry?</label>
                 </div>
-
                 <div className="flex items-center gap-2">
                   <input type="checkbox" id="edit_tax" checked={editAddTax} onChange={e => setEditAddTax(e.target.checked)} className="checkbox checkbox-sm checkbox-primary" />
                   <label htmlFor="edit_tax" className="text-sm cursor-pointer">Add Tax</label>
                 </div>
               </div>
             </div>
-
             <div className="modal-action mt-4 border-t border-gray-200 dark:border-gray-700 pt-3">
               <button className="btn btn-primary flex-1" onClick={saveEdit}>Save Item</button>
               <button className="btn flex-1" onClick={() => setEditId(null)}>Cancel</button>
@@ -472,14 +398,14 @@ export default function Inventory() {
         </div>
       </div>
 
-      {/* Category Breakdown */}
+      {/* 🔴 FIXED: Category Breakdown header responsive */}
       <div className="bg-white dark:bg-gray-800 rounded-xl p-6 shadow">
-        <div className="flex justify-between items-center mb-4">
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 gap-3">
           <h3 className="text-lg font-semibold dark:text-gray-200">📂 Category Breakdown</h3>
-          <div className="flex gap-2">
-            <button onClick={() => setViewMode('cost')} className={`px-3 py-1 rounded-lg text-sm font-medium transition ${viewMode === 'cost' ? 'bg-blue-600 text-white' : 'bg-gray-200 dark:bg-gray-700'}`}>Cost View</button>
-            <button onClick={() => setViewMode('sell')} className={`px-3 py-1 rounded-lg text-sm font-medium transition ${viewMode === 'sell' ? 'bg-green-600 text-white' : 'bg-gray-200 dark:bg-gray-700'}`}>Selling View</button>
-            <button className="btn btn-sm" onClick={exportValueReport}>📥 Export</button>
+          <div className="flex flex-wrap gap-2 w-full sm:w-auto">
+            <button onClick={() => setViewMode('cost')} className={`flex-1 sm:flex-none px-3 py-1 rounded-lg text-sm font-medium transition ${viewMode === 'cost' ? 'bg-blue-600 text-white' : 'bg-gray-200 dark:bg-gray-700'}`}>Cost View</button>
+            <button onClick={() => setViewMode('sell')} className={`flex-1 sm:flex-none px-3 py-1 rounded-lg text-sm font-medium transition ${viewMode === 'sell' ? 'bg-green-600 text-white' : 'bg-gray-200 dark:bg-gray-700'}`}>Selling View</button>
+            <button className="btn btn-sm flex-1 sm:flex-none" onClick={exportValueReport}>📥 Export</button>
           </div>
         </div>
         <div className="overflow-x-auto">
@@ -520,7 +446,11 @@ export default function Inventory() {
                   <td className="px-4 py-3 text-sm text-gray-500 dark:text-gray-400">{i.product_variants?.variant_value || '—'}</td>
                   <td className="px-4 py-3 text-sm text-right font-semibold">Rs. {i.price}</td>
                   <td className="px-4 py-3 text-sm text-right">Rs. {i.cost_price}</td>
-                  <td className="px-4 py-3 text-sm text-right">{i.stock_quantity}</td>
+                  <td className="px-4 py-3 text-right">
+                    <span className={`px-2 py-1 rounded text-xs font-bold ${i.stock_quantity <= 5 ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400' : 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'}`}>
+                      {i.stock_quantity}
+                    </span>
+                  </td>
                   <td className="px-4 py-3 text-center">
                     <div className="flex justify-center gap-2">
                       <button className="px-2 py-1 text-xs bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300 rounded hover:bg-blue-200 dark:hover:bg-blue-900/50 transition" onClick={() => startEdit(i)}>✏️ Edit</button>
@@ -534,14 +464,14 @@ export default function Inventory() {
         </table>
       </div>
 
-      {/* Stock Movement Report */}
+      {/* 🔴 FIXED: Stock Movement inputs responsive */}
       <div className="bg-white dark:bg-gray-800 rounded-xl p-6 shadow">
         <h3 className="text-lg font-semibold mb-4 dark:text-gray-200">Stock Movement Report (Date Range)</h3>
-        <div className="flex flex-col sm:flex-row gap-4 items-end mb-4">
-          <div><label className="text-sm font-medium">From</label><input type="date" className="input input-bordered w-full" value={fromDate} onChange={e => setFromDate(e.target.value)} /></div>
-          <div><label className="text-sm font-medium">To</label><input type="date" className="input input-bordered w-full" value={toDate} onChange={e => setToDate(e.target.value)} /></div>
-          <button className="btn btn-primary" onClick={loadMovement}>Load</button>
-          {showMovement && movement.length > 0 && <button className="btn btn-sm" onClick={exportMovement}>📥 Export Report</button>}
+        <div className="flex flex-col sm:flex-row gap-4 items-stretch sm:items-end mb-4">
+          <div className="flex-1"><label className="text-sm font-medium">From</label><input type="date" className="input input-bordered w-full" value={fromDate} onChange={e => setFromDate(e.target.value)} /></div>
+          <div className="flex-1"><label className="text-sm font-medium">To</label><input type="date" className="input input-bordered w-full" value={toDate} onChange={e => setToDate(e.target.value)} /></div>
+          <button className="btn btn-primary w-full sm:w-auto" onClick={loadMovement}>Load</button>
+          {showMovement && movement.length > 0 && <button className="btn btn-sm w-full sm:w-auto" onClick={exportMovement}>📥 Export Report</button>}
         </div>
         {showMovement && movement.length > 0 && (
           <div className="overflow-x-auto">
