@@ -151,7 +151,7 @@ export default function POS() {
     const product = products.find(p => p.id === selectedCartItem.id)
     
     if (selectedCartItem.preventOutOfStock && editQty > product.stock) {
-      showToast(`⚠️ ප්‍රමාණය තොගයට වඩා වැඩියි. (ඇත්තේ ${product.stock} යි)`, 'error')
+      showToast(`⚠️ ප්රමාණය තොගයට වඩා වැඩියි. (ඇත්තේ ${product.stock} යි)`, 'error')
       return
     }
     setCart(prev => prev.map(item => {
@@ -184,7 +184,6 @@ export default function POS() {
 
   const clearCustomer = () => { setSelectedCustomer(null); setCustomerPhone(''); setCustomerSearch('') }
 
-  // 🔴 UPDATE: New createNewCustomer function to catch detailed errors
   const createNewCustomer = async () => {
     try {
       if (!newCustName || !customerPhone) { 
@@ -208,7 +207,6 @@ export default function POS() {
         .single();
 
       if (mainErr) {
-        // මේකෙන් Database එකේ තියෙන ඇත්තම එරර් එක පෙන්වයි!
         alert(`🔴 DATABASE ERROR:\n\nMessage: ${mainErr.message}\nDetails: ${mainErr.details || 'N/A'}\nHint: ${mainErr.hint || 'N/A'}`);
         return;
       }
@@ -268,7 +266,7 @@ export default function POS() {
     const supported = ('contacts' in navigator && 'ContactsManager' in window);
     
     if (!supported) {
-      showToast("ඔයාගේ බ්‍රවුසරය හෝ උපාංගය Contact Picker එකට සහය නොදක්වයි. කරුණාකර Mobile Phone එකක් භාවිත කරන්න.", "error");
+      showToast("ඔයාගේ බ්රවුසරය හෝ උපාංගය Contact Picker එකට සහය නොදක්වයි. කරුණාකර Mobile Phone එකක් භාවිත කරන්න.", "error");
       return;
     }
 
@@ -298,8 +296,8 @@ export default function POS() {
       const content = evt.target.result
       const nameMatch = content.match(/FN:(.+)/i)
       const telMatch = content.match(/TEL.*:(.+)/i)
-      const name = nameMatch ? nameMatch[1].trim() : ''
-      const phone = telMatch ? telMatch[1].replace(/[^\d+]/g, '').trim() : ''
+      const name = nameMatch ? nameMatch.trim() : ''
+      const phone = telMatch ? telMatch.replace(/[^\d+]/g, '').trim() : ''
       if (phone || name) {
         const cust = customers.find(c => c.phone === phone)
         if (cust) selectCustomerFromSearch(cust)
@@ -310,13 +308,14 @@ export default function POS() {
     reader.readAsText(file)
   }
 
+  // 🔴 FIX: Direct fail-safe stock update in checkout
   const checkout = async (status = 'completed') => {
     if (cart.length === 0) return
     
     for (const item of cart) {
       if (item.preventOutOfStock) {
         const { data: bp } = await supabase.from('branch_products').select('stock_quantity').eq('id', item.id).single()
-        if (!bp || bp.stock_quantity < item.qty) { showToast(`අවවාදයයි: ${item.name} සඳහා ප්‍රමාණවත් තොග නොමැත!`, 'error'); return }
+        if (!bp || bp.stock_quantity < item.qty) { showToast(`අවවාදයයි: ${item.name} සඳහා ප්රමාණවත් තොග නොමැත!`, 'error'); return }
       }
     }
 
@@ -354,7 +353,24 @@ export default function POS() {
     
     if (order) {
       await supabase.from('order_items').insert(cart.map(i => ({ order_id: order.id, branch_product_id: i.id, quantity: i.qty, price: i.price })))
-      for (const item of cart) { if (item.autoUpdateStock !== false) { await supabase.rpc('decrement_stock', { bp_id: item.id, qty: item.qty }) } }
+      
+      // 🔴 FIX: Direct, Fail-safe Stock Update on branch_products table
+      for (const item of cart) { 
+        if (item.autoUpdateStock !== false) { 
+          try {
+            await supabase.rpc('decrement_stock', { bp_id: item.id, qty: item.qty });
+          } catch (err) {}
+
+          const currentStock = Number(item.stock ?? 0);
+          const newStock = Math.max(0, currentStock - Number(item.qty || 1));
+
+          await supabase
+            .from('branch_products')
+            .update({ stock_quantity: newStock })
+            .eq('id', item.id);
+        } 
+      }
+
       if (status === 'completed') { try { await supabase.rpc('create_parallel_order', { main_order_id: order.id, target_branch_id: PARALLEL_BRANCH_ID }); } catch (err) {} }
       
       if (selectedCustomer && paymentMethod === 'credit' && status === 'completed') {
@@ -468,7 +484,7 @@ export default function POS() {
     }
     setIsPrinting(true);
     try {
-      showToast('ප්‍රින්ටරය තෝරන්න...', 'info');
+      showToast('ප්රින්ටරය තෝරන්න...', 'info');
       const device = await navigator.bluetooth.requestDevice({
         acceptAllDevices: true,
         optionalServices: ['000018f0-0000-1000-8000-00805f9b34fb', 'e7810a71-73ae-499d-8c15-faa9aef0c3f2']
@@ -491,7 +507,7 @@ export default function POS() {
       }
 
       if (!characteristic) {
-        throw new Error('ප්‍රින්ටරයේ අදාළ සේවාව (Characteristic) සොයාගත නොහැක.');
+        throw new Error('ප්රින්ටරයේ අදාළ සේවාව (Characteristic) සොයාගත නොහැක.');
       }
 
       const items = lastBill.items;
@@ -549,7 +565,7 @@ export default function POS() {
   const productPanel = (
     <div className="bg-white dark:bg-gray-800 text-gray-900 dark:text-white rounded-xl shadow-2xl p-4 flex flex-col space-y-3 overflow-hidden min-h-0 flex-1">
       <div className="flex gap-2">
-        <input className="flex-1 border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-gray-50 dark:bg-gray-900 dark:bg-gray-700 text-gray-900 dark:text-white text-base" placeholder="🔍 I want to sell..." value={search} onChange={e => setSearch(e.target.value)} />
+        <input className="flex-1 border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white text-base" placeholder="🔍 I want to sell..." value={search} onChange={e => setSearch(e.target.value)} />
         <button className="px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition" onClick={startScanner}><BsUpcScan size={18} /></button>
         {scanner && <button className="px-3 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition text-sm" onClick={stopScanner}>Stop</button>}
       </div>
@@ -581,11 +597,11 @@ export default function POS() {
         </div>
       )}
       {holdOrders.length > 0 && (
-        <div className="bg-gray-100 dark:bg-gray-700 rounded-lg p-3 mt-2 border border-gray-200 dark:border-gray-700 dark:border-gray-600">
+        <div className="bg-gray-100 dark:bg-gray-700 rounded-lg p-3 mt-2 border border-gray-200 dark:border-gray-600">
           <h4 className="font-medium text-sm mb-2 text-gray-900 dark:text-white ">📌 Hold Orders ({holdOrders.length})</h4>
           <div className="space-y-2 max-h-40 overflow-y-auto">
             {holdOrders.map(o => (
-              <div key={o.id} className="flex items-center justify-between bg-white dark:bg-gray-800 p-2 rounded border border-gray-200 dark:border-gray-700 dark:border-gray-600 text-sm">
+              <div key={o.id} className="flex items-center justify-between bg-white dark:bg-gray-800 p-2 rounded border border-gray-200 dark:border-gray-600 text-sm">
                 <div className="text-gray-900 dark:text-white "><span className="font-semibold">#{o.id.slice(0,6)}</span><span className="ml-2">{currency}{o.total}</span>{o.hold_note && <span className="ml-2 text-xs opacity-70">({o.hold_note})</span>}</div>
                 <div className="flex gap-1">
                   <button className="px-2 py-1 bg-blue-500 text-white rounded text-xs hover:bg-blue-600 transition" onClick={() => loadHold(o.id)}>Load</button>
@@ -606,10 +622,10 @@ export default function POS() {
       <div className="relative mb-3" ref={customerDropdownRef}>
         <div className="flex items-center gap-2">
           <div className="relative flex-1">
-            <input type="text" className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-gray-50 dark:bg-gray-900 dark:bg-gray-700 text-gray-900 dark:text-white text-base" placeholder="🔍 Search customer..." value={customerSearch} onChange={(e) => { setCustomerSearch(e.target.value); setShowCustomerDropdown(true) }} onFocus={() => setShowCustomerDropdown(true)} />
+            <input type="text" className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white text-base" placeholder="🔍 Search customer..." value={customerSearch} onChange={(e) => { setCustomerSearch(e.target.value); setShowCustomerDropdown(true) }} onFocus={() => setShowCustomerDropdown(true)} />
             {customerSearch && filteredCustomers.length > 0 && showCustomerDropdown && (
-              <ul className="absolute z-50 mt-1 w-full bg-white dark:bg-gray-800 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg shadow-lg max-h-48 overflow-y-auto text-gray-900 dark:text-white ">
-                {filteredCustomers.map(c => <li key={c.id} className="px-3 py-2 hover:bg-gray-100 dark:bg-gray-700 dark:hover:bg-gray-600 cursor-pointer text-sm" onClick={() => selectCustomerFromSearch(c)}><span className="font-medium">{c.name}</span> <span className="text-xs opacity-70">({c.phone})</span></li>)}
+              <ul className="absolute z-50 mt-1 w-full bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg shadow-lg max-h-48 overflow-y-auto text-gray-900 dark:text-white ">
+                {filteredCustomers.map(c => <li key={c.id} className="px-3 py-2 hover:bg-gray-100 dark:hover:bg-gray-600 cursor-pointer text-sm" onClick={() => selectCustomerFromSearch(c)}><span className="font-medium">{c.name}</span> <span className="text-xs opacity-70">({c.phone})</span></li>)}
               </ul>
             )}
           </div>
@@ -620,7 +636,7 @@ export default function POS() {
       </div>
 
       {selectedCustomer ? (
-        <div className="mb-3 p-2 bg-gray-100 dark:bg-gray-700 border border-gray-200 dark:border-gray-700 dark:border-gray-600 rounded text-sm text-gray-900 dark:text-white ">
+        <div className="mb-3 p-2 bg-gray-100 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded text-sm text-gray-900 dark:text-white ">
           <p className="font-bold">{selectedCustomer.name}</p>
           <p className={selectedCustomer.total_credit > 0 ? 'text-red-500 font-semibold' : ''}>Credit: {currency}{selectedCustomer.total_credit}</p>
         </div>
@@ -635,7 +651,7 @@ export default function POS() {
       <div className="flex-1 overflow-y-auto space-y-1.5 mb-3 pr-1 mt-2">
         {cart.length === 0 ? <div className="text-center text-sm opacity-50 dark:text-gray-400 py-8">🛒 No items in cart</div> : (
           cart.map((item, idx) => (
-            <div key={idx} className="flex justify-between items-center bg-gray-50 dark:bg-gray-900 dark:bg-gray-700 p-2.5 rounded-lg text-sm sm:text-base border border-gray-200 dark:border-gray-700 dark:border-gray-600 text-gray-900 dark:text-white ">
+            <div key={idx} className="flex justify-between items-center bg-gray-50 dark:bg-gray-700 p-2.5 rounded-lg text-sm sm:text-base border border-gray-200 dark:border-gray-600 text-gray-900 dark:text-white ">
               <div className="flex-1 pr-2"><span className="font-medium block line-clamp-1">{item.name}</span></div>
               <div className="flex items-center gap-1">
                 <button className="px-2 py-0.5 bg-gray-200 dark:bg-gray-600 rounded font-bold" onClick={() => updateCartQty(item.id, item.qty - 1)}>−</button>
@@ -651,15 +667,15 @@ export default function POS() {
       </div>
 
       <div className="flex items-center gap-2 mb-3">
-        <input type="number" placeholder="Discount" className="w-24 border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-gray-50 dark:bg-gray-900 dark:bg-gray-700 text-gray-900 dark:text-white text-base" value={discount} onChange={e => setDiscount(Number(e.target.value))} />
+        <input type="number" placeholder="Discount" className="w-24 border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white text-base" value={discount} onChange={e => setDiscount(Number(e.target.value))} />
         <span className="text-sm opacity-70">Discount</span>
       </div>
 
-      <div className="bg-gray-50 dark:bg-gray-900 dark:bg-gray-700 border border-gray-200 dark:border-gray-700 dark:border-gray-600 rounded-lg p-3 mb-4 text-sm sm:text-base text-gray-900 dark:text-white ">
+      <div className="bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg p-3 mb-4 text-sm sm:text-base text-gray-900 dark:text-white ">
         <div className="flex justify-between"><span>Subtotal</span> <span>{currency}{subtotal.toFixed(2)}</span></div>
         {taxEnabled && <div className="flex justify-between"><span>Tax ({taxRate}%)</span> <span>{currency}{taxAmount.toFixed(2)}</span></div>}
         {discount > 0 && <div className="flex justify-between text-red-500 dark:text-red-400"><span>Discount</span> <span>-{currency}{discount.toFixed(2)}</span></div>}
-        <div className="flex justify-between text-lg sm:text-xl font-bold mt-1 pt-1 border-t border-gray-300 dark:border-gray-600 dark:border-gray-500"><span>Total</span> <span>{currency}{final.toFixed(2)}</span></div>
+        <div className="flex justify-between text-lg sm:text-xl font-bold mt-1 pt-1 border-t border-gray-300 dark:border-gray-500"><span>Total</span> <span>{currency}{final.toFixed(2)}</span></div>
       </div>
       
       <div className="mb-4">
@@ -673,17 +689,17 @@ export default function POS() {
 
       {paymentMethod === 'cheque' && (
         <div className="grid grid-cols-2 gap-2 mb-3">
-          <input type="text" className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-gray-50 dark:bg-gray-900 dark:bg-gray-700 text-gray-900 dark:text-white text-sm" placeholder="Cheque Number" value={chequeNumber} onChange={e => setChequeNumber(e.target.value)} />
-          <input type="date" className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-gray-50 dark:bg-gray-900 dark:bg-gray-700 text-gray-900 dark:text-white text-sm" value={chequeDate} onChange={e => setChequeDate(e.target.value)} />
+          <input type="text" className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white text-sm" placeholder="Cheque Number" value={chequeNumber} onChange={e => setChequeNumber(e.target.value)} />
+          <input type="date" className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white text-sm" value={chequeDate} onChange={e => setChequeDate(e.target.value)} />
         </div>
       )}
       {paymentMethod === 'bank_transfer' && (
-        <div className="mb-3"><input type="text" className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-gray-50 dark:bg-gray-900 dark:bg-gray-700 text-gray-900 dark:text-white text-sm" placeholder="Bank Reference" value={bankReference} onChange={e => setBankReference(e.target.value)} /></div>
+        <div className="mb-3"><input type="text" className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white text-sm" placeholder="Bank Reference" value={bankReference} onChange={e => setBankReference(e.target.value)} /></div>
       )}
       {paymentMethod === 'credit' && (
         <div className="mb-3">
           <label className="block text-sm font-medium mb-1 text-gray-900 dark:text-white ">Due Date</label>
-          <input type="date" className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-gray-50 dark:bg-gray-900 dark:bg-gray-700 text-gray-900 dark:text-white text-sm" value={creditDueDate} onChange={e => setCreditDueDate(e.target.value)} />
+          <input type="date" className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white text-sm" value={creditDueDate} onChange={e => setCreditDueDate(e.target.value)} />
         </div>
       )}
 
@@ -724,7 +740,7 @@ export default function POS() {
       )}
       {isMobile && mobileView === 'billing' && <div className="flex flex-col h-[calc(100vh-120px)]">{billingTerminal}</div>}
 
-      {/* Modals - Updated for Dark Mode */}
+      {/* Modals */}
       {editModalOpen && selectedCartItem && (
         <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
           <div className="bg-white dark:bg-gray-800 text-gray-900 dark:text-white rounded-2xl w-full max-w-md p-6 space-y-4 shadow-2xl border border-transparent dark:border-gray-700">
@@ -734,13 +750,13 @@ export default function POS() {
             </div>
             <div>
               <label className="block text-xs font-semibold mb-1">Selling Price ({currency})</label>
-              <input type="number" value={editPrice} onChange={(e) => setEditPrice(e.target.value)} className="w-full border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-900 dark:bg-gray-700 text-gray-900 dark:text-white rounded-xl px-4 py-2.5 font-bold" />
+              <input type="number" value={editPrice} onChange={(e) => setEditPrice(e.target.value)} className="w-full border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white rounded-xl px-4 py-2.5 font-bold" />
             </div>
             <div>
               <label className="block text-xs font-semibold mb-1">Quantity</label>
               <div className="flex items-center gap-3">
                 <button type="button" onClick={() => setEditQty(Math.max(1, editQty - 1))} className="p-3 bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400 rounded-xl font-bold"><FiMinus size={18} /></button>
-                <input type="number" min="1" value={editQty} onChange={(e) => setEditQty(Math.max(1, Number(e.target.value)))} className="flex-1 border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-900 dark:bg-gray-700 text-gray-900 dark:text-white rounded-xl py-2.5 text-center font-bold text-lg" />
+                <input type="number" min="1" value={editQty} onChange={(e) => setEditQty(Math.max(1, Number(e.target.value)))} className="flex-1 border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white rounded-xl py-2.5 text-center font-bold text-lg" />
                 <button type="button" onClick={() => setEditQty(editQty + 1)} className="p-3 bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400 rounded-xl font-bold"><FiPlus size={18} /></button>
               </div>
             </div>
@@ -782,8 +798,8 @@ export default function POS() {
               </button>
             </div>
 
-            <input type="text" className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 mb-2 bg-gray-50 dark:bg-gray-900 dark:bg-gray-700 text-gray-900 dark:text-white " placeholder="Name" value={newCustName} onChange={e => setNewCustName(e.target.value)} />
-            <input type="tel" className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 mb-4 bg-gray-50 dark:bg-gray-900 dark:bg-gray-700 text-gray-900 dark:text-white " placeholder="Phone" value={customerPhone} onChange={e => setCustomerPhone(e.target.value)} />
+            <input type="text" className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 mb-2 bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white " placeholder="Name" value={newCustName} onChange={e => setNewCustName(e.target.value)} />
+            <input type="tel" className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 mb-4 bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white " placeholder="Phone" value={customerPhone} onChange={e => setCustomerPhone(e.target.value)} />
             <div className="flex gap-2">
               <button className="flex-1 px-4 py-3 bg-green-600 hover:bg-green-700 text-white rounded-lg font-medium" onClick={createNewCustomer}>Create</button>
               <button className="flex-1 px-4 py-3 bg-red-500 hover:bg-red-600 text-white rounded-lg font-medium" onClick={() => setNewCustomerForm(false)}>Cancel</button>
