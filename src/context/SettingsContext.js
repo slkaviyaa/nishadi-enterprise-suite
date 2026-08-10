@@ -25,6 +25,7 @@ const SettingsContext = createContext({
     invite_code: '',
   },
   refetchSettings: () => {},
+  updateSettings: () => {},
 })
 
 export function SettingsProvider({ children }) {
@@ -41,31 +42,64 @@ export function SettingsProvider({ children }) {
     low_stock_global: 5, invite_code: '',
   })
 
+  // 1. LocalStorage එකෙන් ක්ෂණිකව Saved Theme එක Load කිරීම
+  useEffect(() => {
+    try {
+      const savedSettings = localStorage.getItem('app_settings')
+      if (savedSettings) {
+        const parsed = JSON.parse(savedSettings)
+        setSettings(prev => ({ ...prev, ...parsed }))
+      }
+    } catch (e) {
+      console.error('LocalStorage read error:', e)
+    }
+  }, [])
+
+  // 2. Supabase branch_settings මගින් Load කිරීම
   const fetchSettings = async () => {
     if (!branch) return
-    const { data } = await supabase
-      .from('branch_settings')
-      .select('*')
-      .eq('branch_id', branch)
-      .single()
-    if (data) setSettings(prev => ({ ...prev, ...data }))
+    try {
+      const { data } = await supabase
+        .from('branch_settings')
+        .select('*')
+        .eq('branch_id', branch)
+        .single()
+      if (data) {
+        setSettings(prev => ({ ...prev, ...data }))
+        localStorage.setItem('app_settings', JSON.stringify(data))
+      }
+    } catch (err) {
+      console.error('Fetch settings error:', err)
+    }
   }
 
   useEffect(() => {
     fetchSettings()
   }, [branch])
 
-  // Apply theme
+  // 3. Local State & LocalStorage ක්ෂණිකව Update කිරීමේ Helper
+  const updateSettings = (newSettings) => {
+    setSettings(prev => {
+      const updated = { ...prev, ...newSettings }
+      localStorage.setItem('app_settings', JSON.stringify(updated))
+      return updated
+    })
+  }
+
+  // 4. <html> Tag එකට 'dark' Class එක යෙදීම
   useEffect(() => {
     const root = document.documentElement
     const applyTheme = (theme) => {
-      if (theme === 'dark') root.classList.add('dark')
-      else if (theme === 'light') root.classList.remove('dark')
-      else if (theme === 'system') {
+      if (theme === 'dark') {
+        root.classList.add('dark')
+      } else if (theme === 'light') {
+        root.classList.remove('dark')
+      } else if (theme === 'system') {
         const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches
         root.classList.toggle('dark', prefersDark)
       }
     }
+
     applyTheme(settings.theme)
 
     if (settings.theme === 'system') {
@@ -77,7 +111,7 @@ export function SettingsProvider({ children }) {
   }, [settings.theme])
 
   return (
-    <SettingsContext.Provider value={{ settings, refetchSettings: fetchSettings }}>
+    <SettingsContext.Provider value={{ settings, refetchSettings: fetchSettings, updateSettings }}>
       {children}
     </SettingsContext.Provider>
   )
