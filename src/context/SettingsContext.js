@@ -3,7 +3,7 @@ import { createContext, useContext, useEffect, useState } from 'react'
 import { supabase } from '../lib/supabaseClient'
 import { useAuth } from './AuthContext'
 
-// default value to avoid null destructure
+// Default values
 const SettingsContext = createContext({
   settings: {
     pos_enabled: true,
@@ -42,20 +42,27 @@ export function SettingsProvider({ children }) {
     low_stock_global: 5, invite_code: '',
   })
 
-  // 1. LocalStorage එකෙන් ක්ෂණිකව Saved Theme එක Load කිරීම
+  // 1. LocalStorage එකෙන් පරිශීලකයාගේ explicit theme එක මුලින්ම Read කිරීම
   useEffect(() => {
     try {
+      const savedTheme = localStorage.getItem('theme') || localStorage.getItem('app_theme')
       const savedSettings = localStorage.getItem('app_settings')
+      let merged = {}
       if (savedSettings) {
-        const parsed = JSON.parse(savedSettings)
-        setSettings(prev => ({ ...prev, ...parsed }))
+        merged = JSON.parse(savedSettings)
+      }
+      if (savedTheme) {
+        merged.theme = savedTheme
+      }
+      if (Object.keys(merged).length > 0) {
+        setSettings(prev => ({ ...prev, ...merged }))
       }
     } catch (e) {
       console.error('LocalStorage read error:', e)
     }
   }, [])
 
-  // 2. Supabase branch_settings මගින් Load කිරීම
+  // 2. Fetch from Supabase branch_settings
   const fetchSettings = async () => {
     if (!branch) return
     try {
@@ -65,8 +72,13 @@ export function SettingsProvider({ children }) {
         .eq('branch_id', branch)
         .single()
       if (data) {
-        setSettings(prev => ({ ...prev, ...data }))
-        localStorage.setItem('app_settings', JSON.stringify(data))
+        setSettings(prev => {
+          const localTheme = localStorage.getItem('theme')
+          const finalTheme = localTheme || data.theme || prev.theme
+          const updated = { ...prev, ...data, theme: finalTheme }
+          localStorage.setItem('app_settings', JSON.stringify(updated))
+          return updated
+        })
       }
     } catch (err) {
       console.error('Fetch settings error:', err)
@@ -77,36 +89,34 @@ export function SettingsProvider({ children }) {
     fetchSettings()
   }, [branch])
 
-  // 3. Local State & LocalStorage ක්ෂණිකව Update කිරීමේ Helper
+  // 3. Update Settings & Save Explicit Local Theme
   const updateSettings = (newSettings) => {
     setSettings(prev => {
       const updated = { ...prev, ...newSettings }
+      if (newSettings.theme) {
+        localStorage.setItem('theme', newSettings.theme)
+      }
       localStorage.setItem('app_settings', JSON.stringify(updated))
       return updated
     })
   }
 
-  // 4. <html> Tag එකට 'dark' Class එක යෙදීම
+  // 4. Apply Theme to <html> (Explicit user choice ALWAYS overrides System OS mode)
   useEffect(() => {
     const root = document.documentElement
-    const applyTheme = (theme) => {
-      if (theme === 'dark') {
+    const currentTheme = settings.theme || 'light'
+
+    if (currentTheme === 'dark') {
+      root.classList.add('dark')
+    } else if (currentTheme === 'light') {
+      root.classList.remove('dark')
+    } else if (currentTheme === 'system') {
+      const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches
+      if (prefersDark) {
         root.classList.add('dark')
-      } else if (theme === 'light') {
+      } else {
         root.classList.remove('dark')
-      } else if (theme === 'system') {
-        const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches
-        root.classList.toggle('dark', prefersDark)
       }
-    }
-
-    applyTheme(settings.theme)
-
-    if (settings.theme === 'system') {
-      const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)')
-      const listener = () => applyTheme('system')
-      mediaQuery.addEventListener('change', listener)
-      return () => mediaQuery.removeEventListener('change', listener)
     }
   }, [settings.theme])
 
