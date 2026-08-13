@@ -3,18 +3,26 @@ import { createContext, useContext, useEffect, useState } from 'react'
 import { supabase } from '../lib/supabaseClient'
 import { useAuth } from './AuthContext'
 
-const DEFAULT_SETTINGS = {
-  pos_enabled: true, inventory_enabled: true, customers_enabled: true,
-  reports_enabled: true, staff_enabled: true, shop_enabled: true,
-  users_enabled: true, bill_settings_enabled: true,
-  tax_enabled: false, tax_rate: 0, currency_symbol: 'Rs. ',
-  theme: 'light', date_format: 'DD/MM/YYYY',
-  bill_header: 'Nishadi Motors', bill_footer: 'Thank you!',
-  low_stock_global: 5, invite_code: '',
-}
-
 const SettingsContext = createContext({
-  settings: DEFAULT_SETTINGS,
+  settings: {
+    pos_enabled: true,
+    inventory_enabled: true,
+    customers_enabled: true,
+    reports_enabled: true,
+    staff_enabled: true,
+    shop_enabled: true,
+    users_enabled: true,
+    bill_settings_enabled: true,
+    tax_enabled: false,
+    tax_rate: 0,
+    currency_symbol: 'Rs. ',
+    theme: 'light',
+    date_format: 'DD/MM/YYYY',
+    bill_header: 'Nishadi Motors',
+    bill_footer: 'Thank you!',
+    low_stock_global: 5,
+    invite_code: '',
+  },
   refetchSettings: () => {},
   updateSettings: () => {},
 })
@@ -22,7 +30,16 @@ const SettingsContext = createContext({
 export function SettingsProvider({ children }) {
   const auth = useAuth()
   const branch = auth?.branch
-  const [settings, setSettings] = useState(DEFAULT_SETTINGS)
+
+  const [settings, setSettings] = useState({
+    pos_enabled: true, inventory_enabled: true, customers_enabled: true,
+    reports_enabled: true, staff_enabled: true, shop_enabled: true,
+    users_enabled: true, bill_settings_enabled: true,
+    tax_enabled: false, tax_rate: 0, currency_symbol: 'Rs. ',
+    theme: 'light', date_format: 'DD/MM/YYYY',
+    bill_header: 'Nishadi Motors', bill_footer: 'Thank you!',
+    low_stock_global: 5, invite_code: '',
+  })
 
   useEffect(() => {
     try {
@@ -31,7 +48,7 @@ export function SettingsProvider({ children }) {
       let merged = {}
       if (savedSettings) merged = JSON.parse(savedSettings)
       if (savedTheme) merged.theme = savedTheme
-      if (Object.keys(merged).length) setSettings(prev => ({ ...prev, ...merged }))
+      if (Object.keys(merged).length > 0) setSettings(prev => ({ ...prev, ...merged }))
     } catch (e) {
       console.error('LocalStorage read error:', e)
     }
@@ -39,26 +56,31 @@ export function SettingsProvider({ children }) {
 
   const fetchSettings = async () => {
     if (!branch) return
+    try {
+      const { data, error } = await supabase
+        .from('branch_settings')
+        .select('*')
+        .eq('branch_id', branch)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
 
-    const { data, error } = await supabase
-      .from('branch_settings')
-      .select('*')
-      .eq('branch_id', branch)
-      .maybeSingle()
+      if (error) {
+        console.error('Fetch settings error:', error)
+        return
+      }
 
-    if (error) {
-      console.error('Fetch branch settings error:', error)
-      return
-    }
-
-    if (data) {
-      setSettings(prev => {
-        // Theme remains a local preference; all other settings are branch-scoped.
-        const localTheme = localStorage.getItem('theme')
-        const updated = { ...prev, ...data, theme: localTheme || data.theme || prev.theme }
-        localStorage.setItem('app_settings', JSON.stringify(updated))
-        return updated
-      })
+      if (data) {
+        setSettings(prev => {
+          const localTheme = localStorage.getItem('theme')
+          const finalTheme = localTheme || data.theme || prev.theme
+          const updated = { ...prev, ...data, theme: finalTheme }
+          localStorage.setItem('app_settings', JSON.stringify(updated))
+          return updated
+        })
+      }
+    } catch (err) {
+      console.error('Fetch settings error:', err)
     }
   }
 
@@ -78,9 +100,13 @@ export function SettingsProvider({ children }) {
   useEffect(() => {
     const root = document.documentElement
     const currentTheme = settings.theme || 'light'
+
     if (currentTheme === 'dark') root.classList.add('dark')
     else if (currentTheme === 'light') root.classList.remove('dark')
-    else if (currentTheme === 'system') root.classList.toggle('dark', window.matchMedia('(prefers-color-scheme: dark)').matches)
+    else if (currentTheme === 'system') {
+      const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches
+      root.classList.toggle('dark', prefersDark)
+    }
   }, [settings.theme])
 
   return (
