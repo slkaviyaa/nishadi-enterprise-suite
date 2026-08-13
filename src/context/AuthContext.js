@@ -2,13 +2,11 @@
 import { createContext, useContext, useEffect, useState } from 'react'
 import { usePathname } from 'next/navigation'
 import { supabase } from '../lib/supabaseClient'
+import { DEFAULT_BRANCH_ID } from '../lib/branches'
 import Login from '../components/Login'
 import MainLayout from '../components/MainLayout'
 
 const AuthContext = createContext(null)
-
-// Default Branch ID for fallback (Main Branch)
-const DEFAULT_BRANCH_ID = '11111111-1111-1111-1111-111111111111'
 
 export function AuthProvider({ children }) {
   const pathname = usePathname()
@@ -21,66 +19,66 @@ export function AuthProvider({ children }) {
   const isPublic = publicRoutes.includes(pathname)
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => {
-      setSession(data.session)
-      if (data.session) loadUser(data.session.user)
-      else setLoading(false)
-    })
-    const { data: listener } = supabase.auth.onAuthStateChange((_e, session) => {
-      setSession(session)
-      if (session) loadUser(session.user)
-      else { setBranch(null); setUser(null); setLoading(false) }
-    })
-    return () => listener.subscription.unsubscribe()
-  }, [])
+    let mounted = true
 
-  const loadUser = async (authUser) => {
-    if (!authUser) {
-      setLoading(false)
-      return
-    }
+    const loadCurrentUser = async (authUser) => {
+      if (!authUser) {
+        if (mounted) {
+          setBranch(null)
+          setUser(null)
+          setLoading(false)
+        }
+        return
+      }
 
-    const userId = authUser.id
+      // staff is the canonical application identity. Do not silently turn an
+      // unreadable/missing staff row into an owner on Main Branch.
+      const { data: staff, error } = await supabase
+        .from('staff')
+        .select('id, branch_id, username, display_name, role, permissions')
+        .eq('id', authUser.id)
+        .maybeSingle()
 
-    // 1. Check staff table first
-    const { data: staff } = await supabase.from('staff')
-      .select('id, branch_id, username, display_name, role, permissions')
-      .eq('id', userId)
-      .maybeSingle()
+      if (!mounted) return
 
-    if (staff) {
+      if (error) {
+        console.error('Unable to load staff profile:', error)
+        setUser(null)
+        setBranch(null)
+        setLoading(false)
+        return
+      }
+
+      if (!staff) {
+        console.error('Authenticated user has no staff record:', authUser.id)
+        setUser(null)
+        setBranch(null)
+        setLoading(false)
+        return
+      }
+
       setUser(staff)
-      // Branch ID එක නැත්නම් Default Branch එක දානවා
       setBranch(staff.branch_id || DEFAULT_BRANCH_ID)
       setLoading(false)
-      return
     }
 
-    // 2. Check profiles table
-    const { data: profile } = await supabase.from('profiles')
-      .select('id, branch_id, display_name, role')
-      .eq('id', userId)
-      .maybeSingle()
+    supabase.auth.getSession().then(({ data }) => {
+      if (!mounted) return
+      setSession(data.session)
+      loadCurrentUser(data.session?.user || null)
+    })
 
-    if (profile) {
-      setUser({ ...profile, role: profile.role || 'owner' })
-      setBranch(profile.branch_id || DEFAULT_BRANCH_ID)
-      setLoading(false)
-      return
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      if (!mounted) return
+      setSession(nextSession)
+      loadCurrentUser(nextSession?.user || null)
+    })
+
+    return () => {
+      mounted = false
+      listener.subscription.unsubscribe()
     }
-
-    // 3. Database එකේ නැති අලුත් User කෙනෙක් නම්, Default Fallback User Profile එකක් සෙට් කරලා Dashboard එක ඕපන් කරනවා
-    const fallbackUser = {
-      id: userId,
-      display_name: authUser.user_metadata?.full_name || authUser.email?.split('@')[0] || 'User',
-      role: 'owner',
-      branch_id: DEFAULT_BRANCH_ID
-    }
-
-    setUser(fallbackUser)
-    setBranch(DEFAULT_BRANCH_ID)
-    setLoading(false)
-  }
+  }, [])
 
   const signInWithGoogle = async (inviteCode = null) => {
     let redirectTo = `${window.location.origin}/auth/callback`
@@ -96,10 +94,9 @@ export function AuthProvider({ children }) {
 
   if (loading) return <div className="flex h-screen items-center justify-center font-medium">Loading...</div>
 
-  if (session) {
-    // No branch restriction check block anymore — defaults automatically
+  if (session && user && branch) {
     return (
-      <AuthContext.Provider value={{ branch: branch || DEFAULT_BRANCH_ID, user, signInWithGoogle, signOut }}>
+      <AuthContext.Provider value={{ branch, user, signInWithGoogle, signOut }}>
         <MainLayout>{children}</MainLayout>
       </AuthContext.Provider>
     )
