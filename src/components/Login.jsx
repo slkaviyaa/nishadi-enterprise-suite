@@ -4,6 +4,7 @@ import { supabase } from '../lib/supabaseClient'
 import { useRouter } from 'next/navigation'
 import { useToast } from '../context/ToastContext'
 import Link from 'next/link'
+import PageTemplate from './PageTemplate';
 
 export default function Login() {
   const [identifier, setIdentifier] = useState('') // Email එක හෝ Username එක

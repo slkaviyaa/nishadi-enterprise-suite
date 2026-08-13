@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabaseClient';
+import PageTemplate from './PageTemplate';
 
 export default function Suppliers() {
   const [suppliers, setSuppliers] = useState([]);

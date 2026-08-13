@@ -1,5 +1,6 @@
 'use client'
 import { useState, useEffect } from 'react'
+import PageTemplate from './PageTemplate';
 
 export default function Devices() {
   const [printerDevice, setPrinterDevice] = useState(null)
@@ -10,7 +11,6 @@ export default function Devices() {
   const [drawerConnected, setDrawerConnected] = useState(false)
   const [message, setMessage] = useState('')
 
-  // Load saved device names
   useEffect(() => {
     const savedPrinter = localStorage.getItem('printerName')
     const savedScale = localStorage.getItem('scaleName')
@@ -20,149 +20,105 @@ export default function Devices() {
     if (savedDrawer) setCashDrawerDevice({ name: savedDrawer })
   }, [])
 
-  // Connect Printer
-  const connectPrinter = async () => {
+  const connectDevice = async (type) => {
     try {
-      setMessage('Searching for printer...')
-      const device = await navigator.bluetooth.requestDevice({
-        acceptAllDevices: true,
-        optionalServices: ['000018f0-0000-1000-8000-00805f9b34fb']
-      })
-      setPrinterDevice(device)
-      localStorage.setItem('printerName', device.name || 'Printer')
-      setPrinterConnected(true)
-      setMessage('Printer connected!')
-    } catch (err) {
-      setMessage('Failed: ' + err.message)
-    }
+      setMessage(`Searching for ${type}...`)
+      let service = ''
+      if(type === 'printer') service = '000018f0-0000-1000-8000-00805f9b34fb'
+      if(type === 'scale') service = '0000181d-0000-1000-8000-00805f9b34fb'
+      if(type === 'drawer') service = '0000180a-0000-1000-8000-00805f9b34fb'
+
+      const device = await navigator.bluetooth.requestDevice({ acceptAllDevices: true, optionalServices: [service] })
+      
+      if(type === 'printer') { setPrinterDevice(device); localStorage.setItem('printerName', device.name || 'Printer'); setPrinterConnected(true) }
+      if(type === 'scale') { setScaleDevice(device); localStorage.setItem('scaleName', device.name || 'Scale'); setScaleConnected(true) }
+      if(type === 'drawer') { setCashDrawerDevice(device); localStorage.setItem('drawerName', device.name || 'Drawer'); setDrawerConnected(true) }
+      
+      setMessage(`${type} connected successfully!`)
+    } catch (err) { setMessage('Failed: ' + err.message) }
   }
 
-  const disconnectPrinter = () => {
-    if (printerDevice?.gatt?.connected) printerDevice.gatt.disconnect()
-    setPrinterDevice(null)
-    setPrinterConnected(false)
-    localStorage.removeItem('printerName')
+  const disconnectDevice = (type) => {
+    if(type === 'printer') { if(printerDevice?.gatt?.connected) printerDevice.gatt.disconnect(); setPrinterDevice(null); setPrinterConnected(false); localStorage.removeItem('printerName') }
+    if(type === 'scale') { if(scaleDevice?.gatt?.connected) scaleDevice.gatt.disconnect(); setScaleDevice(null); setScaleConnected(false); localStorage.removeItem('scaleName') }
+    if(type === 'drawer') { if(cashDrawerDevice?.gatt?.connected) cashDrawerDevice.gatt.disconnect(); setCashDrawerDevice(null); setDrawerConnected(false); localStorage.removeItem('drawerName') }
   }
 
-  // Connect Scale
-  const connectScale = async () => {
-    try {
-      setMessage('Searching for scale...')
-      const device = await navigator.bluetooth.requestDevice({
-        acceptAllDevices: true,
-        optionalServices: ['0000181d-0000-1000-8000-00805f9b34fb']
-      })
-      setScaleDevice(device)
-      localStorage.setItem('scaleName', device.name || 'Scale')
-      setScaleConnected(true)
-      setMessage('Scale connected!')
-    } catch (err) {
-      setMessage('Failed: ' + err.message)
-    }
-  }
+  const activeCount = [printerConnected, scaleConnected, drawerConnected].filter(Boolean).length
 
-  const disconnectScale = () => {
-    if (scaleDevice?.gatt?.connected) scaleDevice.gatt.disconnect()
-    setScaleDevice(null)
-    setScaleConnected(false)
-    localStorage.removeItem('scaleName')
-  }
-
-  // Connect Cash Drawer
-  const connectDrawer = async () => {
-    try {
-      setMessage('Searching for cash drawer...')
-      const device = await navigator.bluetooth.requestDevice({
-        acceptAllDevices: true,
-        optionalServices: ['0000180a-0000-1000-8000-00805f9b34fb'] // Device Information (generic)
-      })
-      setCashDrawerDevice(device)
-      localStorage.setItem('drawerName', device.name || 'Cash Drawer')
-      setDrawerConnected(true)
-      setMessage('Cash drawer connected!')
-    } catch (err) {
-      setMessage('Failed: ' + err.message)
-    }
-  }
-
-  const disconnectDrawer = () => {
-    if (cashDrawerDevice?.gatt?.connected) cashDrawerDevice.gatt.disconnect()
-    setCashDrawerDevice(null)
-    setDrawerConnected(false)
-    localStorage.removeItem('drawerName')
-  }
-
-  // Test open drawer (simulate)
-  const openDrawer = () => {
-    // In real implementation, send ESC/POS command to printer (printer triggers drawer)
-    alert('Cash drawer open signal sent!')
-  }
+  const metrics = [
+    { label: 'Active Devices', value: activeCount, icon: '🔌' },
+    { label: 'System Status', value: activeCount > 0 ? 'Online' : 'Standby', icon: '⚡' },
+  ]
 
   return (
-    <div className="space-y-6 text-gray-900 dark:text-white dark:text-gray-100">
-      <h2 className="text-2xl font-bold dark:text-white">Bluetooth Devices</h2>
-
-      {message && (
-        <div className={`px-4 py-2 rounded-lg text-sm ${message.includes('Failed') ? 'bg-red-100 text-red-800 dark:bg-red-900/20 dark:text-red-300' : 'bg-blue-100 text-blue-800 dark:bg-blue-900/20 dark:text-blue-300'}`}>
-          {message}
-        </div>
-      )}
-
-      {/* Printer */}
-      <div className="bg-white dark:bg-gray-800 rounded-xl p-6 shadow">
-        <div className="flex items-center justify-between mb-3">
-          <div>
-            <h3 className="text-lg font-semibold">🖨️ Thermal Printer</h3>
-            {printerDevice && <p className="text-sm opacity-70">{printerDevice.name}</p>}
+    <PageTemplate
+      title="🔌 Bluetooth Devices"
+      subtitle="Connect POS hardware via Web Bluetooth API"
+      metrics={metrics}
+    >
+      <div className="space-y-6">
+        {message && (
+          <div className={`px-4 py-3 rounded-xl text-sm font-semibold border ${message.includes('Failed') ? 'bg-red-50 text-red-800 border-red-200' : 'bg-blue-50 text-blue-800 border-blue-200'}`}>
+            {message}
           </div>
-          <span className={`px-3 py-1 rounded-full text-xs font-medium ${printerConnected ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300' : 'bg-gray-200 dark:bg-gray-700'}`}>
-            {printerConnected ? 'Connected' : 'Disconnected'}
-          </span>
-        </div>
-        <div className="flex gap-2">
-          <button className="btn btn-primary btn-sm" onClick={connectPrinter}>Connect Printer</button>
-          {printerConnected && <button className="btn btn-outline btn-sm text-red-500" onClick={disconnectPrinter}>Disconnect</button>}
+        )}
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          {/* Printer */}
+          <div className="bg-white dark:bg-gray-800 rounded-xl p-6 shadow-sm border border-gray-200 dark:border-gray-700">
+            <div className="flex flex-col items-center text-center space-y-3">
+              <div className="w-16 h-16 bg-blue-50 dark:bg-blue-900/30 rounded-full flex items-center justify-center text-3xl">🖨️</div>
+              <h3 className="font-bold text-gray-800 dark:text-white">Thermal Printer</h3>
+              <p className="text-xs text-gray-500 h-4">{printerDevice ? printerDevice.name : 'No device paired'}</p>
+              <span className={`px-3 py-1 rounded-full text-xs font-bold ${printerConnected ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'}`}>
+                {printerConnected ? 'Connected' : 'Disconnected'}
+              </span>
+              <div className="pt-4 w-full flex flex-col gap-2">
+                <button className="w-full bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium py-2 rounded-lg" onClick={() => connectDevice('printer')}>Pair Printer</button>
+                {printerConnected && <button className="w-full bg-gray-100 hover:bg-gray-200 text-red-600 text-sm font-medium py-2 rounded-lg" onClick={() => disconnectDevice('printer')}>Disconnect</button>}
+              </div>
+            </div>
+          </div>
+
+          {/* Scale */}
+          <div className="bg-white dark:bg-gray-800 rounded-xl p-6 shadow-sm border border-gray-200 dark:border-gray-700">
+            <div className="flex flex-col items-center text-center space-y-3">
+              <div className="w-16 h-16 bg-blue-50 dark:bg-blue-900/30 rounded-full flex items-center justify-center text-3xl">⚖️</div>
+              <h3 className="font-bold text-gray-800 dark:text-white">Weight Scale</h3>
+              <p className="text-xs text-gray-500 h-4">{scaleDevice ? scaleDevice.name : 'No device paired'}</p>
+              <span className={`px-3 py-1 rounded-full text-xs font-bold ${scaleConnected ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'}`}>
+                {scaleConnected ? 'Connected' : 'Disconnected'}
+              </span>
+              <div className="pt-4 w-full flex flex-col gap-2">
+                <button className="w-full bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium py-2 rounded-lg" onClick={() => connectDevice('scale')}>Pair Scale</button>
+                {scaleConnected && <button className="w-full bg-gray-100 hover:bg-gray-200 text-red-600 text-sm font-medium py-2 rounded-lg" onClick={() => disconnectDevice('scale')}>Disconnect</button>}
+              </div>
+            </div>
+          </div>
+
+          {/* Drawer */}
+          <div className="bg-white dark:bg-gray-800 rounded-xl p-6 shadow-sm border border-gray-200 dark:border-gray-700">
+            <div className="flex flex-col items-center text-center space-y-3">
+              <div className="w-16 h-16 bg-blue-50 dark:bg-blue-900/30 rounded-full flex items-center justify-center text-3xl">💵</div>
+              <h3 className="font-bold text-gray-800 dark:text-white">Cash Drawer</h3>
+              <p className="text-xs text-gray-500 h-4">{cashDrawerDevice ? cashDrawerDevice.name : 'No device paired'}</p>
+              <span className={`px-3 py-1 rounded-full text-xs font-bold ${drawerConnected ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'}`}>
+                {drawerConnected ? 'Connected' : 'Disconnected'}
+              </span>
+              <div className="pt-4 w-full flex flex-col gap-2">
+                <button className="w-full bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium py-2 rounded-lg" onClick={() => connectDevice('drawer')}>Pair Drawer</button>
+                {drawerConnected && (
+                  <div className="flex gap-2 w-full">
+                    <button className="flex-1 bg-green-100 hover:bg-green-200 text-green-700 text-sm font-bold py-2 rounded-lg" onClick={() => alert('Drawer open signal sent!')}>Open</button>
+                    <button className="flex-1 bg-gray-100 hover:bg-gray-200 text-red-600 text-sm font-medium py-2 rounded-lg" onClick={() => disconnectDevice('drawer')}>Disconnect</button>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
         </div>
       </div>
-
-      {/* Scale */}
-      <div className="bg-white dark:bg-gray-800 rounded-xl p-6 shadow">
-        <div className="flex items-center justify-between mb-3">
-          <div>
-            <h3 className="text-lg font-semibold">⚖️ Weight Scale</h3>
-            {scaleDevice && <p className="text-sm opacity-70">{scaleDevice.name}</p>}
-          </div>
-          <span className={`px-3 py-1 rounded-full text-xs font-medium ${scaleConnected ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300' : 'bg-gray-200 dark:bg-gray-700'}`}>
-            {scaleConnected ? 'Connected' : 'Disconnected'}
-          </span>
-        </div>
-        <div className="flex gap-2">
-          <button className="btn btn-primary btn-sm" onClick={connectScale}>Connect Scale</button>
-          {scaleConnected && <button className="btn btn-outline btn-sm text-red-500" onClick={disconnectScale}>Disconnect</button>}
-        </div>
-      </div>
-
-      {/* Cash Drawer */}
-      <div className="bg-white dark:bg-gray-800 rounded-xl p-6 shadow">
-        <div className="flex items-center justify-between mb-3">
-          <div>
-            <h3 className="text-lg font-semibold">💵 Cash Drawer</h3>
-            {cashDrawerDevice && <p className="text-sm opacity-70">{cashDrawerDevice.name}</p>}
-          </div>
-          <span className={`px-3 py-1 rounded-full text-xs font-medium ${drawerConnected ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300' : 'bg-gray-200 dark:bg-gray-700'}`}>
-            {drawerConnected ? 'Connected' : 'Disconnected'}
-          </span>
-        </div>
-        <div className="flex gap-2">
-          <button className="btn btn-primary btn-sm" onClick={connectDrawer}>Connect Drawer</button>
-          {drawerConnected && (
-            <>
-              <button className="btn btn-success btn-sm" onClick={openDrawer}>Open Drawer</button>
-              <button className="btn btn-outline btn-sm text-red-500" onClick={disconnectDrawer}>Disconnect</button>
-            </>
-          )}
-        </div>
-      </div>
-    </div>
+    </PageTemplate>
   )
 }

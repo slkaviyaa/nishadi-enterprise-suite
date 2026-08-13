@@ -4,6 +4,7 @@ import { supabase } from '../lib/supabaseClient'
 import { useAuth } from '../context/AuthContext'
 import { useSettings } from '../context/SettingsContext'
 import Link from 'next/link'
+import PageTemplate from './PageTemplate';
 
 export default function Dashboard() {
   const { branch: currentBranch } = useAuth()
@@ -18,31 +19,36 @@ export default function Dashboard() {
     supabase.from('orders').select('total').eq('branch_id', currentBranch).eq('status','completed')
       .gte('created_at', new Date().toISOString().split('T')[0])
       .then(({ data }) => { if (data) setStats(prev => ({ ...prev, sales: data.reduce((s,o)=>s+o.total,0) })) })
+    
     supabase.from('customers').select('*', { count:'exact', head:true }).eq('branch_id', currentBranch)
       .then(({ count }) => setStats(prev => ({ ...prev, customers: count||0 })))
+    
     supabase.from('branch_products').select('*', { count:'exact', head:true }).eq('branch_id', currentBranch).eq('is_active', true)
       .then(({ count }) => setStats(prev => ({ ...prev, products: count||0 })))
+    
     supabase.from('expenses').select('amount').eq('branch_id', currentBranch)
       .gte('created_at', new Date().toISOString().split('T')[0])
       .then(({ data }) => { if (data) setStats(prev => ({ ...prev, expenses: data.reduce((s,e)=>s+e.amount,0) })) })
+    
     // Overdue credits
     supabase.from('credit_transactions').select('id, amount, due_date, customers(name, phone)')
       .eq('branch_id', currentBranch).eq('type','purchase')
       .lt('due_date', new Date().toISOString().split('T')[0])
       .order('due_date').then(({ data }) => setOverdueCredits(data || []))
-    // Low stock items via database function
+    
+    // Low stock items
     supabase.rpc('get_low_stock_items', { bid: currentBranch })
       .then(({ data }) => setLowStockItems(data || []))
   }, [currentBranch])
 
   const currency = settings?.currency_symbol || 'Rs. '
   const shortcuts = [
-    { href: '/pos', label: '🛒 POS', bg: 'bg-blue-600' },
-    { href: '/inventory', label: '📦 Inventory', bg: 'bg-purple-600' },
-    { href: '/customers', label: '👥 Customers', bg: 'bg-pink-600' },
-    { href: '/reports', label: '📊 Reports', bg: 'bg-teal-600' },
-    { href: '/staff', label: '👨‍💼 Staff', bg: 'bg-orange-500' },
-    { href: '/shop', label: '🛍️ Shop', bg: 'bg-green-600' },
+    { href: '/pos', label: '🛒 POS System', bg: 'bg-blue-600', icon: '💻' },
+    { href: '/inventory', label: '📦 Inventory', bg: 'bg-purple-600', icon: '📊' },
+    { href: '/customers', label: '👥 Customers', bg: 'bg-pink-600', icon: '🤝' },
+    { href: '/reports', label: '📊 Reports', bg: 'bg-teal-600', icon: '📈' },
+    { href: '/staff', label: '👨‍💼 Staff', bg: 'bg-orange-500', icon: '👤' },
+    { href: '/shop', label: '🛍️ Shop Front', bg: 'bg-green-600', icon: '🏪' },
   ].filter(s => {
     if (s.href==='/pos' && settings?.pos_enabled===false) return false
     if (s.href==='/inventory' && settings?.inventory_enabled===false) return false
@@ -53,44 +59,77 @@ export default function Dashboard() {
     return true
   })
 
-  return (
-    <div className="space-y-6 animate-fadeIn">
-      <h1 className="text-3xl font-bold text-gray-900 dark:text-white ">Dashboard</h1>
-      <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="bg-blue-600 text-white rounded-xl p-4 shadow hover:scale-105 transition"><div className="text-sm text-blue-100">Today's Sales</div><div className="text-xl sm:text-2xl font-bold">{currency}{stats.sales.toLocaleString()}</div></div>
-        <div className="bg-purple-600 text-white rounded-xl p-4 shadow hover:scale-105 transition"><div className="text-sm text-purple-100">Customers</div><div className="text-xl sm:text-2xl font-bold">{stats.customers}</div></div>
-        <div className="bg-pink-600 text-white rounded-xl p-4 shadow hover:scale-105 transition"><div className="text-sm text-pink-100">Products</div><div className="text-xl sm:text-2xl font-bold">{stats.products}</div></div>
-        <div className="bg-orange-500 text-white rounded-xl p-4 shadow hover:scale-105 transition"><div className="text-sm text-orange-100">Expenses</div><div className="text-xl sm:text-2xl font-bold">{currency}{stats.expenses.toLocaleString()}</div></div>
-      </div>
+  const metrics = [
+    { label: "Today's Sales", value: `${currency}${stats.sales.toLocaleString()}`, icon: '💰' },
+    { label: "Total Customers", value: stats.customers, icon: '👥' },
+    { label: "Active Products", value: stats.products, icon: '📦' },
+    { label: "Today's Expenses", value: `${currency}${stats.expenses.toLocaleString()}`, icon: '📉' },
+  ]
 
-      {/* Low Stock Alert */}
-      {lowStockItems.length > 0 && (
-        <div className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-xl p-4">
-          <h3 className="font-semibold text-yellow-700 dark:text-yellow-400 mb-2">⚠️ Low Stock Alert</h3>
-          <div className="space-y-1">
-            {lowStockItems.map((item, idx) => (
-              <div key={idx} className="flex justify-between text-sm">
-                <span>{item.product_name}</span>
-                <span className="font-medium">Stock: {item.stock_quantity} (Min: {item.low_stock_threshold})</span>
+  return (
+    <PageTemplate
+      title="📊 Main Dashboard"
+      subtitle="Overview of your daily business metrics and alerts"
+      metrics={metrics}
+    >
+      <div className="space-y-6 animate-fadeIn">
+        
+        {/* Alerts Section */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          {/* Low Stock Alert */}
+          {lowStockItems.length > 0 && (
+            <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-xl p-5 shadow-sm">
+              <div className="flex items-center gap-2 mb-3">
+                <span className="text-xl">⚠️</span>
+                <h3 className="font-bold text-amber-800 dark:text-amber-400">Low Stock Alerts ({lowStockItems.length})</h3>
               </div>
+              <div className="space-y-2 max-h-40 overflow-y-auto pr-2 custom-scrollbar">
+                {lowStockItems.map((item, idx) => (
+                  <div key={idx} className="flex justify-between items-center bg-white dark:bg-gray-800 p-2 rounded-lg border border-amber-100 dark:border-amber-900">
+                    <span className="text-sm font-medium text-gray-800 dark:text-gray-200 truncate">{item.product_name}</span>
+                    <span className="text-xs font-bold text-red-600 bg-red-100 dark:bg-red-900/30 px-2 py-1 rounded">Stock: {item.stock_quantity}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Overdue Credits */}
+          {overdueCredits.length > 0 && (
+            <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-xl p-5 shadow-sm">
+              <div className="flex items-center gap-2 mb-3">
+                <span className="text-xl">💳</span>
+                <h3 className="font-bold text-red-800 dark:text-red-400">Overdue Credits ({overdueCredits.length})</h3>
+              </div>
+              <div className="space-y-2 max-h-40 overflow-y-auto pr-2 custom-scrollbar">
+                {overdueCredits.map(oc => (
+                  <div key={oc.id} className="flex flex-col sm:flex-row sm:items-center justify-between bg-white dark:bg-gray-800 p-2 rounded-lg border border-red-100 dark:border-red-900">
+                    <span className="text-sm font-medium text-gray-800 dark:text-gray-200">{oc.customers?.name}</span>
+                    <div className="flex items-center gap-3">
+                      <span className="text-xs text-gray-500">Due: {oc.due_date}</span>
+                      <span className="text-sm font-bold text-red-600">{currency}{oc.amount}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Quick Shortcuts */}
+        <div>
+          <h3 className="text-lg font-bold text-gray-800 dark:text-white mb-4 mt-2 border-b pb-2 dark:border-gray-700">Quick Shortcuts</h3>
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+            {shortcuts.map(s => (
+              <Link key={s.href} href={s.href} className={`${s.bg} text-white rounded-xl p-5 flex flex-col items-center justify-center gap-2 hover:-translate-y-1 hover:shadow-xl transition-all duration-200`}>
+                <span className="text-2xl">{s.icon}</span>
+                <span className="text-sm font-bold text-center">{s.label.split(' ')[1]}</span>
+              </Link>
             ))}
           </div>
         </div>
-      )}
 
-      {/* Overdue Credits */}
-      {overdueCredits.length > 0 && (
-        <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 rounded-xl p-4">
-          <h3 className="font-semibold text-red-700 dark:text-red-400">⚠️ Overdue Credits</h3>
-          {overdueCredits.map(oc => <div key={oc.id} className="flex justify-between text-sm"><span>{oc.customers?.name}</span><span>{currency}{oc.amount}</span><span>Due: {oc.due_date}</span></div>)}
-        </div>
-      )}
-
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-        {shortcuts.map(s => (
-          <Link key={s.href} href={s.href} className={`${s.bg} text-white rounded-xl p-6 flex items-center justify-center text-lg font-bold hover:scale-105 hover:shadow-lg transition`}>{s.label}</Link>
-        ))}
       </div>
-    </div>
+    </PageTemplate>
   )
 }

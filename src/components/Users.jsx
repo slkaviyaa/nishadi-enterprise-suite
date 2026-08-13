@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react'
 import { useAuth } from '../context/AuthContext'
 import { useToast } from '../context/ToastContext'
 import { supabase } from '../lib/supabaseClient'
+import PageTemplate from './PageTemplate'
 
 const ALL_PERMISSIONS = [
   'pos.read', 'pos.write',

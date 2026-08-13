@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react'
 import { Inter } from "next/font/google";
 import "./globals.css";
 import SplashScreen from "@/src/components/SplashScreen"; // අර ඔයාගේ කම්පෝනන්ට් එක
+import PageTemplate from './PageTemplate';
 
 const inter = Inter({ subsets: ["latin"] });
 

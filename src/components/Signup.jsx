@@ -2,6 +2,7 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
+import PageTemplate from './PageTemplate';
 
 export default function Signup() {
   const [email, setEmail] = useState('')

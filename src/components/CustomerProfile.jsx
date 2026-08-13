@@ -4,6 +4,7 @@ import { supabase } from '../lib/supabaseClient'
 import { useAuth } from '../context/AuthContext'
 import { useToast } from '../context/ToastContext'
 import { useRouter } from 'next/navigation'
+import PageTemplate from './PageTemplate';
 
 export default function CustomerProfile({ customerId }) {
   const { branch } = useAuth()
@@ -13,7 +14,7 @@ export default function CustomerProfile({ customerId }) {
   const [transactions, setTransactions] = useState([])
   const [orders, setOrders] = useState([])
   const [modeFilter, setModeFilter] = useState('all')
-  const [viewItems, setViewItems] = useState(null)        // items modal
+  const [viewItems, setViewItems] = useState(null)
   const [returnOrder, setReturnOrder] = useState(null)
   const [printModal, setPrintModal] = useState(false)
   const [printContent, setPrintContent] = useState('')
@@ -27,78 +28,103 @@ export default function CustomerProfile({ customerId }) {
 
   useEffect(() => {
     if (!customerId) return
+
+    // Load Customer Info
     supabase.from('customers').select('*').eq('id', customerId).single()
-      .then(({ data }) => {
-        setCustomer(data)
-        // Last visit from orders
-        supabase.from('orders')
-          .select('created_at')
-          .eq('customer_id', customerId)
-          .order('created_at', { ascending: false })
-          .limit(1)
-          .maybeSingle()
-          .then(({ data: last }) => { if (last) setLastVisit(last.created_at) })
-      })
-      .catch(err => showToast('Failed to load customer', 'error'))
+      .then(({ data }) => { if (data) setCustomer(data) })
+
+    // Load Last Visit
+    let orderQuery = supabase.from('orders').select('created_at').eq('customer_id', customerId)
+    if (branch) orderQuery = orderQuery.eq('branch_id', branch)
+    orderQuery.order('created_at', { ascending: false }).limit(1).maybeSingle()
+      .then(({ data: last }) => { if (last) setLastVisit(last.created_at) })
+
     loadTransactions()
     loadOrders()
     loadAnalytics()
-  }, [customerId, modeFilter])
+  }, [customerId, branch, modeFilter])
 
   const loadTransactions = async () => {
-    setLoading(true)
     try {
       let query = supabase.from('credit_transactions')
         .select('*')
         .eq('customer_id', customerId)
         .order('created_at', { ascending: false })
+      
       if (modeFilter !== 'all') query = query.eq('payment_mode', modeFilter)
+      
       const { data, error } = await query
-      if (error) showToast('Failed to load transactions', 'error')
-      else setTransactions(data || [])
-    } catch (err) { showToast('Error loading transactions', 'error') }
-    setLoading(false)
+      if (!error) setTransactions(data || [])
+    } catch (err) { 
+      console.error(err) 
+    }
   }
 
-  const loadOrders = () => {
-    supabase.from('orders')
-      .select('id, total, created_at, status, payment_method, order_items(id, quantity, price, returned_quantity, branch_products(products(name)))')
-      .eq('customer_id', customerId)
-      .eq('branch_id', branch)
-      .order('created_at', { ascending: false })
-      .then(({ data, error }) => {
-        if (error) showToast('Failed to load orders', 'error')
-        else setOrders(data || [])
-      })
+  const loadOrders = async () => {
+    try {
+      let query = supabase.from('orders')
+        .select(`
+          id, total, created_at, status, payment_method, 
+          order_items(id, quantity, price, returned_quantity, branch_product_id)
+        `)
+        .eq('customer_id', customerId)
+
+      if (branch) query = query.eq('branch_id', branch)
+
+      const { data, error } = await query.order('created_at', { ascending: false })
+
+      if (!error && data) {
+        const formattedOrders = await Promise.all(data.map(async (ord) => {
+          const enrichedItems = await Promise.all((ord.order_items || []).map(async (item) => {
+            let productName = 'Unknown Item'
+            if (item.branch_product_id) {
+              const { data: bp } = await supabase
+                .from('branch_products')
+                .select('products(name)')
+                .eq('id', item.branch_product_id)
+                .maybeSingle()
+              
+              if (bp?.products?.name) productName = bp.products.name
+            }
+            return { ...item, name: productName }
+          }))
+          return { ...ord, order_items: enrichedItems }
+        }))
+        setOrders(formattedOrders)
+      }
+    } catch (err) {
+      console.error(err)
+    } finally {
+      setLoading(false)
+    }
   }
 
-  const loadAnalytics = () => {
-    // Total Revenue from orders
-    supabase.from('orders')
-      .select('total, payment_method')
-      .eq('customer_id', customerId)
-      .eq('branch_id', branch)
-      .eq('status', 'completed')
-      .then(({ data }) => {
-        if (data) {
-          const total = data.reduce((sum, o) => sum + o.total, 0)
-          setTotalRevenue(total)
-          setAvgBill(data.length > 0 ? (total / data.length).toFixed(2) : 0)
+  const loadAnalytics = async () => {
+    try {
+      let query = supabase.from('orders').select('total, payment_method').eq('customer_id', customerId).eq('status', 'completed')
+      if (branch) query = query.eq('branch_id', branch)
+      
+      const { data } = await query
+      if (data) {
+        const total = data.reduce((sum, o) => sum + o.total, 0)
+        setTotalRevenue(total)
+        setAvgBill(data.length > 0 ? (total / data.length).toFixed(2) : 0)
 
-          // Payment split
-          const split = {}
-          data.forEach(o => {
-            const method = o.payment_method || 'cash'
-            split[method] = (split[method] || 0) + o.total
-          })
-          setPaymentSplit(split)
-        }
-      })
+        const split = {}
+        data.forEach(o => {
+          const method = o.payment_method || 'cash'
+          split[method] = (split[method] || 0) + o.total
+        })
+        setPaymentSplit(split)
+      }
+    } catch (err) {
+      console.error(err)
+    }
   }
 
   const printOrder = (order) => {
     const itemsHtml = order.order_items.map(i =>
-      `<div class="item"><span>${i.branch_products?.products?.name} x${i.quantity}</span><span>Rs. ${(i.price * i.quantity).toFixed(2)}</span></div>`
+      `<div class="item"><span>${i.name} x${i.quantity}</span><span>Rs. ${(i.price * i.quantity).toFixed(2)}</span></div>`
     ).join('')
 
     const content = `
@@ -118,7 +144,7 @@ export default function CustomerProfile({ customerId }) {
         <div class="item total"><span>Total</span><span>Rs. ${order.total.toFixed(2)}</span></div>
         <p style="text-align:center;font-size:12px;">Payment: ${order.payment_method}</p>
         <p style="text-align:center;font-size:12px;">Status: ${order.status}</p>
-        <p style="text-align:center;margin-top:20px;font-size:10px;">Designed & Developed by Ceylon Digi Solutions</p>
+        <p style="text-align:center;margin-top:20px;font-size:10px;">System by Ceylon Digi Solutions</p>
       </body></html>
     `
     setPrintContent(content)
@@ -151,7 +177,7 @@ export default function CustomerProfile({ customerId }) {
         type: 'payment', note: reason ? `Return: ${reason}` : `Return for order #${orderId.slice(0,6)}`,
         payment_mode: 'return'
       })
-      showToast(`Return processed! Refund: Rs. ${totalRefund}`)
+      showToast(`Return processed! Refund: Rs. ${totalRefund}`, 'success')
       setCustomer(prev => ({ ...prev, total_credit: prev.total_credit - totalRefund }))
       loadTransactions()
       loadOrders()
@@ -163,12 +189,12 @@ export default function CustomerProfile({ customerId }) {
   if (!customer) return <div className="p-4">Loading customer...</div>
 
   return (
-    <div className="space-y-6 text-gray-900 dark:text-white dark:text-gray-100">
+    <div className="space-y-6 text-gray-900 dark:text-white">
       {/* Back + Customer Name */}
       <div className="flex items-center gap-4">
         <button onClick={() => router.push('/customers')} className="px-4 py-2 bg-gray-200 dark:bg-gray-700 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 transition">← Back</button>
         <div>
-          <h2 className="text-2xl font-bold dark:text-white">{customer.name}</h2>
+          <h2 className="text-2xl font-bold">{customer.name}</h2>
           <p className="text-sm opacity-70">📞 {customer.phone} {customer.address && `• 📍 ${customer.address}`}</p>
           {lastVisit && <p className="text-xs opacity-50">Last visit: {new Date(lastVisit).toLocaleDateString()}</p>}
         </div>
@@ -178,7 +204,7 @@ export default function CustomerProfile({ customerId }) {
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
         <div className="bg-blue-600 text-white rounded-xl p-4 shadow">
           <div className="text-sm text-blue-100">Total Credit</div>
-          <div className="text-xl font-bold">Rs. {customer.total_credit.toLocaleString()}</div>
+          <div className="text-xl font-bold">Rs. {customer.total_credit?.toLocaleString() || 0}</div>
         </div>
         <div className="bg-green-600 text-white rounded-xl p-4 shadow">
           <div className="text-sm text-green-100">Total Revenue</div>
@@ -216,15 +242,23 @@ export default function CustomerProfile({ customerId }) {
       </div>
 
       {/* Transactions Table */}
-      <div className="overflow-x-auto bg-white dark:bg-gray-800 rounded-xl shadow">
+      <div className="overflow-x-auto bg-white dark:bg-gray-800 rounded-xl shadow border border-gray-200 dark:border-gray-700">
         <table className="w-full">
-          <thead><tr className="border-b border-gray-200 dark:border-gray-700 text-left"><th className="p-3 text-sm font-medium">Date</th><th className="p-3 text-sm font-medium">Type</th><th className="p-3 text-sm font-medium">Amount</th><th className="p-3 text-sm font-medium">Mode</th><th className="p-3 text-sm font-medium">Note</th></tr></thead>
+          <thead>
+            <tr className="border-b border-gray-200 dark:border-gray-700 text-left text-xs text-gray-500 uppercase">
+              <th className="p-3">Date</th>
+              <th className="p-3">Type</th>
+              <th className="p-3">Amount</th>
+              <th className="p-3">Mode</th>
+              <th className="p-3">Note</th>
+            </tr>
+          </thead>
           <tbody>
             {loading ? <tr><td colSpan={5} className="p-4 text-center">Loading...</td></tr> : transactions.length === 0 ? <tr><td colSpan={5} className="p-4 text-center opacity-50">No transactions found</td></tr> : transactions.map(t => (
-              <tr key={t.id} className="border-b border-gray-100 dark:border-gray-700 hover:bg-gray-50 dark:bg-gray-900 dark:hover:bg-gray-700 transition">
+              <tr key={t.id} className="border-b border-gray-100 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition">
                 <td className="p-3 text-sm">{new Date(t.created_at).toLocaleDateString()}</td>
                 <td className="p-3 text-sm"><span className={`px-2 py-1 rounded-full text-xs font-medium ${t.type === 'purchase' ? 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300' : 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300'}`}>{t.type}</span></td>
-                <td className="p-3 text-sm font-semibold">Rs. {t.amount.toLocaleString()}</td>
+                <td className="p-3 text-sm font-semibold">Rs. {t.amount?.toLocaleString()}</td>
                 <td className="p-3 text-sm capitalize">{t.payment_mode}</td>
                 <td className="p-3 text-sm opacity-70">{t.note || '-'}</td>
               </tr>
@@ -238,26 +272,26 @@ export default function CustomerProfile({ customerId }) {
       {orders.length === 0 ? (
         <div className="text-center py-4 opacity-50">No orders yet</div>
       ) : (
-        <div className="overflow-x-auto bg-white dark:bg-gray-800 rounded-xl shadow">
+        <div className="overflow-x-auto bg-white dark:bg-gray-800 rounded-xl shadow border border-gray-200 dark:border-gray-700">
           <table className="w-full">
             <thead>
-              <tr className="border-b border-gray-200 dark:border-gray-700 text-left">
-                <th className="p-3 text-sm font-medium">Order #</th>
-                <th className="p-3 text-sm font-medium">Date</th>
-                <th className="p-3 text-sm font-medium">Items</th>
-                <th className="p-3 text-sm font-medium text-right">Total</th>
-                <th className="p-3 text-sm font-medium">Status</th>
-                <th className="p-3 text-sm font-medium text-center">Actions</th>
+              <tr className="border-b border-gray-200 dark:border-gray-700 text-left text-xs text-gray-500 uppercase">
+                <th className="p-3">Order #</th>
+                <th className="p-3">Date</th>
+                <th className="p-3">Items</th>
+                <th className="p-3 text-right">Total</th>
+                <th className="p-3">Status</th>
+                <th className="p-3 text-center">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
               {orders.map(order => (
-                <tr key={order.id} className="hover:bg-gray-50 dark:bg-gray-900 dark:hover:bg-gray-700 transition-colors">
+                <tr key={order.id} className="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
                   <td className="p-3 text-sm font-mono">#{order.id.slice(0,6)}</td>
                   <td className="p-3 text-sm">{new Date(order.created_at).toLocaleDateString()}</td>
                   <td className="p-3 text-sm">
                     <button
-                      onClick={() => setViewItems(order.order_items.map(i => ({ name: i.branch_products?.products?.name, qty: i.quantity, price: i.price })))}
+                      onClick={() => setViewItems(order.order_items)}
                       className="text-blue-600 dark:text-blue-400 underline text-xs hover:no-underline"
                     >
                       {order.order_items.length} item(s)
@@ -268,14 +302,14 @@ export default function CustomerProfile({ customerId }) {
                     <span className={`px-2 py-1 rounded-full text-xs font-medium ${
                       order.status === 'completed' ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300' :
                       order.status === 'returned' ? 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300' :
-                      'bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200 dark:bg-gray-700 dark:text-gray-300'
+                      'bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-300'
                     }`}>{order.status}</span>
                   </td>
                   <td className="p-3 text-center">
                     <div className="flex justify-center gap-2">
-                      <button onClick={() => printOrder(order)} className="px-2 py-1 text-xs bg-gray-100 dark:bg-gray-700 text-gray-700 dark:bg-gray-700 dark:text-gray-300 rounded hover:bg-gray-200 dark:hover:bg-gray-600 transition">🖨️</button>
+                      <button onClick={() => printOrder(order)} className="px-2 py-1 text-xs bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded hover:bg-gray-200 dark:hover:bg-gray-600 transition">🖨️</button>
                       {order.status !== 'returned' && (
-                        <button onClick={() => initiateReturn(order)} className="px-2 py-1 text-xs bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-300 rounded hover:bg-orange-200 dark:hover:bg-orange-900/50 transition">↩️</button>
+                        <button onClick={() => initiateReturn(order)} className="px-2 py-1 text-xs bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-300 rounded hover:bg-orange-200 transition">↩️</button>
                       )}
                     </div>
                   </td>
@@ -288,37 +322,37 @@ export default function CustomerProfile({ customerId }) {
 
       {/* View Items Modal */}
       {viewItems && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 animate-fadeIn" onClick={() => setViewItems(null)}>
-          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl p-6 w-11/12 max-w-md animate-scaleIn" onClick={e => e.stopPropagation()}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setViewItems(null)}>
+          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl p-6 w-11/12 max-w-md" onClick={e => e.stopPropagation()}>
             <h3 className="font-bold text-lg mb-4">Order Items</h3>
-            <ul className="divide-y divide-gray-200 dark:divide-gray-700">
+            <ul className="divide-y divide-gray-200 dark:divide-gray-700 max-h-60 overflow-y-auto custom-scrollbar pr-2">
               {viewItems.map((item, idx) => (
                 <li key={idx} className="flex justify-between py-2 text-sm">
-                  <span>{item.name} x{item.qty}</span>
-                  <span className="font-semibold">Rs. {(item.price * item.qty).toFixed(2)}</span>
+                  <span className="truncate pr-2">{item.name} x{item.quantity}</span>
+                  <span className="font-semibold whitespace-nowrap">Rs. {(item.price * item.quantity).toFixed(2)}</span>
                 </li>
               ))}
             </ul>
-            <button onClick={() => setViewItems(null)} className="mt-4 w-full py-2 bg-gray-200 dark:bg-gray-700 rounded-lg">Close</button>
+            <button onClick={() => setViewItems(null)} className="mt-4 w-full py-2 bg-gray-200 dark:bg-gray-700 rounded-lg font-bold transition hover:bg-gray-300 dark:hover:bg-gray-600">Close</button>
           </div>
         </div>
       )}
 
       {/* Return Modal */}
       {returnOrder && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 animate-fadeIn">
-          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl p-6 w-full max-w-lg animate-scaleIn">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl p-6 w-full max-w-lg">
             <h3 className="font-bold text-lg mb-4">Return Items (Order #{returnOrder.orderId.slice(0,6)})</h3>
-            <textarea className="w-full border rounded p-2 mb-3 text-sm" placeholder="Reason for return (optional)" value={returnOrder.reason} onChange={e => setReturnOrder({ ...returnOrder, reason: e.target.value })} />
+            <textarea className="w-full border dark:border-gray-600 bg-gray-50 dark:bg-gray-700 rounded p-2 mb-3 text-sm" placeholder="Reason for return (optional)" value={returnOrder.reason} onChange={e => setReturnOrder({ ...returnOrder, reason: e.target.value })} />
             {returnOrder.items.map((item, idx) => (
               <div key={item.id} className="flex items-center gap-3 mb-2">
-                <span className="flex-1 text-sm">{item.branch_products?.products?.name} (Sold: {item.quantity}, Returned: {item.returned_quantity})</span>
-                <input type="number" min={0} max={item.quantity - item.returned_quantity} value={item.returnQty} onChange={e => { const newItems = [...returnOrder.items]; newItems[idx].returnQty = Math.min(item.quantity - item.returned_quantity, Math.max(0, Number(e.target.value))); setReturnOrder({ ...returnOrder, items: newItems }) }} className="w-20 border rounded px-2 py-1 text-sm" />
+                <span className="flex-1 text-sm truncate">{item.name} (Sold: {item.quantity}, Returned: {item.returned_quantity})</span>
+                <input type="number" min={0} max={item.quantity - item.returned_quantity} value={item.returnQty} onChange={e => { const newItems = [...returnOrder.items]; newItems[idx].returnQty = Math.min(item.quantity - item.returned_quantity, Math.max(0, Number(e.target.value))); setReturnOrder({ ...returnOrder, items: newItems }) }} className="w-20 border dark:border-gray-600 bg-gray-50 dark:bg-gray-700 rounded px-2 py-1 text-sm text-center" />
               </div>
             ))}
             <div className="flex gap-2 justify-end mt-4">
-              <button onClick={processReturn} className="px-4 py-2 bg-blue-600 text-white rounded-lg">Confirm Return</button>
-              <button onClick={() => setReturnOrder(null)} className="px-4 py-2 bg-gray-300 rounded-lg">Cancel</button>
+              <button onClick={processReturn} className="px-4 py-2 bg-blue-600 text-white rounded-lg font-bold hover:bg-blue-700 transition">Confirm Return</button>
+              <button onClick={() => setReturnOrder(null)} className="px-4 py-2 bg-gray-300 dark:bg-gray-700 rounded-lg hover:bg-gray-400 dark:hover:bg-gray-600 transition">Cancel</button>
             </div>
           </div>
         </div>
@@ -328,8 +362,8 @@ export default function CustomerProfile({ customerId }) {
       {printModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setPrintModal(false)}>
           <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-11/12 max-w-md p-4" onClick={e => e.stopPropagation()}>
-            <div className="flex justify-between mb-2"><h3 className="font-bold">Print Order</h3><button onClick={() => { const iframe = document.getElementById('printFrame'); if (iframe) iframe.contentWindow.print() }} className="px-3 py-1 bg-blue-600 text-white rounded text-sm">Print</button></div>
-            <iframe id="printFrame" srcDoc={printContent} className="w-full h-96" title="Receipt Preview" />
+            <div className="flex justify-between mb-2"><h3 className="font-bold">Print Order</h3><button onClick={() => { const iframe = document.getElementById('printFrame'); if (iframe) iframe.contentWindow.print() }} className="px-3 py-1 bg-blue-600 text-white rounded text-sm font-bold hover:bg-blue-700 transition">Print</button></div>
+            <iframe id="printFrame" srcDoc={printContent} className="w-full h-96 bg-white rounded border border-gray-200" title="Receipt Preview" />
           </div>
         </div>
       )}

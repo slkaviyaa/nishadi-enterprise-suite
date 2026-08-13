@@ -22,11 +22,11 @@ export default function Sidebar({ onClose }) {
   const menu = []
 
   // Common modules
-  if (settings?.pos_enabled !== false) menu.push({ href: '/pos', label: 'POS', icon: <FiHome /> })
+  if (settings?.pos_enabled !== false) menu.push({ href: '/pos', label: 'POS Terminal', icon: <FiHome /> })
   if (settings?.inventory_enabled !== false) menu.push({ href: '/inventory', label: 'Inventory', icon: <FiPackage /> })
   if (settings?.customers_enabled !== false) menu.push({ href: '/customers', label: 'Customers', icon: <FiUsers /> })
   if (settings?.reports_enabled !== false) menu.push({ href: '/reports', label: 'Reports', icon: <FiBarChart2 /> })
-  if (settings?.staff_enabled !== false) menu.push({ href: '/staff', label: 'Staff/Expenses', icon: <FiUserCheck /> })
+  if (settings?.staff_enabled !== false) menu.push({ href: '/staff', label: 'Staff & Expenses', icon: <FiUserCheck /> })
   if (settings?.shop_enabled !== false) menu.push({ href: '/shop', label: 'ShopFront', icon: <FiShoppingCart /> })
 
   // Owner-only modules
@@ -55,64 +55,76 @@ export default function Sidebar({ onClose }) {
   }
 
   return (
-    <div className="w-72 bg-[var(--sidebar)] text-[var(--sidebar-text)] flex flex-col shadow-2xl h-screen fixed md:relative z-50 transition-transform duration-300">
-      {/* Header with close button (mobile) */}
-      <div className="p-4 text-xl font-bold border-b border-[var(--border)] flex items-center justify-between">
-        <span>🚛 Nishadi Motors POS</span>
+    <div className="w-full h-full bg-white dark:bg-gray-900 flex flex-col">
+      
+      {/* Header */}
+      <div className="p-5 text-xl font-extrabold border-b border-gray-200 dark:border-gray-800 flex items-center justify-between text-gray-900 dark:text-white shrink-0">
+        <span className="flex items-center gap-2">🚛 Nishadi POS</span>
         <button
-          className="lg:hidden p-1 rounded hover:bg-white dark:bg-gray-800/10"
+          className="lg:hidden p-2 rounded-lg bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-300 transition-colors"
           onClick={onClose}
         >
           <FiX size={20} />
         </button>
       </div>
 
-      {/* Menu */}
-      <ul className="menu flex-1 p-2 space-y-1 overflow-y-auto">
+      {/* Menu List */}
+      <ul className="flex-1 overflow-y-auto p-3 space-y-1 custom-scrollbar">
         <li>
           <Link
             href="/"
-            className="flex items-center gap-3 py-2 transition-all duration-300 hover:bg-white dark:bg-gray-800/10 rounded-lg"
+            className="flex items-center gap-3 px-3 py-2.5 transition-all duration-200 hover:bg-blue-50 hover:text-blue-600 dark:hover:bg-gray-800 dark:text-gray-300 dark:hover:text-white rounded-lg font-semibold"
             onClick={onClose}
           >
-            <FiGrid /> Dashboard
+            <FiGrid size={18} /> Dashboard
           </Link>
         </li>
         {menu.map((item, idx) => (
-          <li
-            key={item.href}
-            className="animate-fadeInRight"
-            style={{ animationDelay: `${0.1 + idx * 0.05}s` }}
-          >
+          <li key={item.href} className="animate-fadeInRight" style={{ animationDelay: `${0.02 * idx}s` }}>
             <Link
               href={item.href}
-              className={`flex items-center gap-3 py-2 transition-all duration-300 rounded-lg ${item.isDanger ? 'text-red-400 hover:bg-red-500/10' : 'hover:bg-white dark:bg-gray-800/10'}`}
+              className={`flex items-center gap-3 px-3 py-2.5 transition-all duration-200 rounded-lg font-semibold text-sm ${
+                item.isDanger 
+                  ? 'text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/20' 
+                  : 'text-gray-700 dark:text-gray-300 hover:bg-blue-50 hover:text-blue-600 dark:hover:bg-gray-800 dark:hover:text-white'
+              }`}
               onClick={onClose}
             >
-              {item.icon} {item.label}
+              <span className="text-[18px] opacity-90">{item.icon}</span> 
+              {item.label}
             </Link>
           </li>
         ))}
       </ul>
 
-      {/* Footer */}
-      <div className="p-4 border-t border-[var(--border)] space-y-2 text-sm">
-        <div className="flex justify-between items-center">
-          <span className="font-medium">{user?.display_name} ({user?.role})</span>
-          <button onClick={logout} className="btn btn-ghost btn-sm">
-            <FiLogOut />
+      {/* Footer Profile */}
+      <div className="p-4 border-t border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-900 shrink-0">
+        <div className="flex justify-between items-center mb-3 px-1">
+          <div className="flex flex-col">
+            <span className="font-bold text-sm text-gray-900 dark:text-white truncate max-w-[150px]">
+              {user?.display_name || 'User'}
+            </span>
+            <span className="text-[10px] font-bold text-blue-600 dark:text-blue-400 uppercase tracking-widest">
+              {user?.role || 'Staff'}
+            </span>
+          </div>
+          <button 
+            onClick={logout} 
+            className="p-2.5 bg-red-100 hover:bg-red-200 dark:bg-red-900/30 dark:hover:bg-red-900/50 text-red-600 rounded-lg transition-colors" 
+            title="Logout"
+          >
+            <FiLogOut size={18} />
           </button>
         </div>
-        <div className="text-center text-xs opacity-60 dark:opacity-80 dark:text-gray-400">
-          <div>{appVersion}</div>
-          <div>
-            Designed & Developed by{' '}
-            <span className="font-semibold dark:text-gray-300">
-              Ceylon Digi Solutions
-            </span>
+        <div className="text-center text-[10px] text-gray-500 dark:text-gray-500 pt-3 border-t border-gray-200 dark:border-gray-800">
+          <div>Version {appVersion}</div>
+          <div className="mt-1">
+            Designed & Developed by <br/>
+            <span className="font-bold text-gray-700 dark:text-gray-400">Ceylon Digi Solutions</span>
           </div>
         </div>
       </div>
+
     </div>
   )
 }
