@@ -18,10 +18,9 @@ export default function Payments() {
   const [filteredBills, setFilteredBills] = useState([])
   const [searchTerm, setSearchTerm] = useState('')
   const [loading, setLoading] = useState(false)
-  const [billSettings, setBillSettings] = useState({}) // 🧾 Bill Settings state linked with branch
+  const [billSettings, setBillSettings] = useState({}) 
   const searchInputRef = useRef(null)
 
-  // Payment Modal States
   const [selectedBill, setSelectedBill] = useState(null)
   const [paymentAmount, setPaymentAmount] = useState('')
   const [billTotalInput, setBillTotalInput] = useState('') 
@@ -70,7 +69,6 @@ export default function Payments() {
 
       setAllBills(mergedBills)
 
-      // Fetch Bill Settings for this branch so receipts match POS bill settings
       const { data: bSettings } = await supabase
         .from('bill_settings')
         .select('*')
@@ -87,7 +85,6 @@ export default function Payments() {
     }
   }
 
-  // ================= 🔍 INSTANT LOCAL LIVE FILTERING =================
   useEffect(() => {
     if (!searchTerm.trim()) {
       setFilteredBills([])
@@ -108,7 +105,6 @@ export default function Payments() {
     setFilteredBills(matched)
   }, [searchTerm, allBills])
 
-  // ================= 💳 PAYMENT PROCESSING & BILL-SETTINGS MATCHED PRINTING =================
   const openPaymentModal = (bill) => {
     setSelectedBill(bill)
     const total = parseFloat(bill.total_amount || bill.total || bill.grand_total || bill.subtotal || bill.amount || 0)
@@ -120,15 +116,8 @@ export default function Payments() {
     setIsModalOpen(true)
   }
 
+  // 🖨️ UNIVERSAL RECEIPT PRINTING FOR PAYMENTS
   const printPaymentReceipt = (bill, paidNow, finalTotal) => {
-    const existingIframe = document.getElementById('thermal-receipt-iframe');
-    if (existingIframe) existingIframe.remove();
-
-    const iframe = document.createElement('iframe');
-    iframe.id = 'thermal-receipt-iframe';
-    iframe.style.display = 'none';
-    document.body.appendChild(iframe);
-
     const s = billSettings || {};
     const receiptNo = 'PR-' + Date.now().toString().slice(-6);
     const receiptId = bill.id ? bill.id.slice(0,6).toUpperCase() : 'REC';
@@ -194,7 +183,6 @@ export default function Payments() {
         ${s.show_footer !== false ? `
         <div class="text-center font-bold text-xs" style="margin-top: 8px; white-space: pre-wrap;">${s.footer_text || 'Thank You! Come Again.'}\n${s.footer_text_sinhala || 'ස්තුතියි! නැවත එන්න...'}</div>` : ''}
 
-        {/* 🔒 Permanent Non-Removable Watermark matching Bill Settings style */}
         <div class="text-center" style="font-size: 8px; margin-top: 15px; border-top: 1px dotted #000; padding-top: 5px; color: #000;">
           Powered by Nishadi Enterprise Suite.<br/>
           Design & Developed by Ceylon Digi Solutions
@@ -203,18 +191,44 @@ export default function Payments() {
       </html>
     `;
 
-    const doc = iframe.contentWindow.document;
-    doc.open();
-    doc.write(receiptHTML);
-    doc.close();
+    // 📱 Device Detection & Universal Printing
+    const userAgent = navigator.userAgent || navigator.vendor || window.opera;
+    const isAndroid = /android/i.test(userAgent);
 
-    setTimeout(() => {
-      iframe.contentWindow.focus();
-      iframe.contentWindow.print();
-      setTimeout(() => { 
-        if (document.body.contains(iframe)) document.body.removeChild(iframe); 
-      }, 1500);
-    }, 400);
+    if (isAndroid) {
+      try {
+        const base64Html = btoa(unescape(encodeURIComponent(receiptHTML)));
+        const rawbtIntentUrl = `intent:base64,${base64Html}#Intent;scheme=rawbt;package=ru.a402d.rawbtprinter;end;`;
+        window.location.href = rawbtIntentUrl;
+      } catch (e) {
+        console.error('RawBT Print Error:', e);
+        if (typeof showToast === 'function') {
+           showToast('Printing failed. Please ensure RawBT app is installed.', 'error');
+        }
+      }
+    } else {
+      const iframeId = 'receipt-iframe-' + Date.now();
+      const existingIframe = document.getElementById(iframeId);
+      if (existingIframe) existingIframe.remove();
+
+      const iframe = document.createElement('iframe');
+      iframe.id = iframeId;
+      iframe.style.display = 'none';
+      document.body.appendChild(iframe);
+
+      const doc = iframe.contentWindow.document;
+      doc.open();
+      doc.write(receiptHTML);
+      doc.close();
+
+      setTimeout(() => {
+        iframe.contentWindow.focus();
+        iframe.contentWindow.print();
+        setTimeout(() => { 
+          if (document.body.contains(iframe)) document.body.removeChild(iframe); 
+        }, 1500);
+      }, 400);
+    }
   }
 
   const handleProcessPayment = async () => {
@@ -299,7 +313,6 @@ export default function Payments() {
           <p className="text-sm opacity-70">Type customer name, phone digit, bill number, or scan QR to search instantly.</p>
         </div>
 
-        {/* Universal Search Bar with QR Scan Button */}
         <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg border border-gray-200 dark:border-gray-700 p-6">
           <div className="flex flex-col sm:flex-row gap-4">
             <div className="relative flex-1">
@@ -324,7 +337,6 @@ export default function Payments() {
               )}
             </div>
 
-            {/* QR Scan Button */}
             <button 
               onClick={() => {
                 setIsScannerOpen(true)
@@ -338,7 +350,6 @@ export default function Payments() {
           {loading && <div className="text-xs text-blue-500 font-bold mt-2 animate-pulse">Loading branch bills...</div>}
         </div>
 
-        {/* Live Results Area */}
         {searchTerm.trim().length > 0 && (
           <div className="space-y-4 animate-fadeIn">
             <h3 className="font-bold text-gray-700 dark:text-gray-300 ml-1">Matching Bills ({filteredBills.length})</h3>
@@ -412,7 +423,6 @@ export default function Payments() {
           </div>
         )}
 
-        {/* QR Scanner Mock Modal */}
         {isScannerOpen && (
           <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4 animate-fadeIn">
             <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl w-full max-w-md p-6 text-center space-y-4">
@@ -437,7 +447,6 @@ export default function Payments() {
           </div>
         )}
 
-        {/* PAYMENT MODAL */}
         {isModalOpen && selectedBill && (
           <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 animate-fadeIn">
             <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden transform animate-scaleIn">
@@ -456,7 +465,6 @@ export default function Payments() {
                   </div>
                 </div>
 
-                {/* Total Bill Amount Input */}
                 <div>
                   <label className="text-xs font-bold text-gray-500 uppercase mb-1 block">Total Bill Amount</label>
                   <input 
@@ -468,7 +476,6 @@ export default function Payments() {
                   />
                 </div>
 
-                {/* Paying Amount Input */}
                 <div>
                   <label className="text-xs font-bold text-gray-500 uppercase mb-1 block">Enter Paying Amount</label>
                   <div className="relative">

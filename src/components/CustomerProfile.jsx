@@ -111,18 +111,10 @@ export default function CustomerProfile({ customerId }) {
     }
   }
 
-  // 🖨️ PERFECT SILENT INVISIBLE IFRAME PRINTING (Zobaze Style)
+  // 🖨️ UNIVERSAL RECEIPT PRINTING FOR CUSTOMER BILL HISTORY
   const printOrder = (order) => {
     showToast('Preparing receipt...', 'info')
     
-    const existingIframe = document.getElementById('customer-receipt-iframe');
-    if (existingIframe) existingIframe.remove();
-
-    const iframe = document.createElement('iframe');
-    iframe.id = 'customer-receipt-iframe';
-    iframe.style.display = 'none';
-    document.body.appendChild(iframe);
-
     const s = billSettings || {};
     const currency = 'Rs. ';
     const validItems = order.order_items || [];
@@ -295,18 +287,44 @@ export default function CustomerProfile({ customerId }) {
       </html>
     `;
     
-    const doc = iframe.contentWindow.document;
-    doc.open();
-    doc.write(receiptHTML);
-    doc.close();
+    // 📱 Device Detection & Universal Printing
+    const userAgent = navigator.userAgent || navigator.vendor || window.opera;
+    const isAndroid = /android/i.test(userAgent);
 
-    setTimeout(() => {
-      iframe.contentWindow.focus();
-      iframe.contentWindow.print();
-      setTimeout(() => { 
-        if (document.body.contains(iframe)) document.body.removeChild(iframe); 
-      }, 1500);
-    }, 400);
+    if (isAndroid) {
+      try {
+        const base64Html = btoa(unescape(encodeURIComponent(receiptHTML)));
+        const rawbtIntentUrl = `intent:base64,${base64Html}#Intent;scheme=rawbt;package=ru.a402d.rawbtprinter;end;`;
+        window.location.href = rawbtIntentUrl;
+      } catch (e) {
+        console.error('RawBT Print Error:', e);
+        if (typeof showToast === 'function') {
+           showToast('Printing failed. Please ensure RawBT app is installed.', 'error');
+        }
+      }
+    } else {
+      const iframeId = 'receipt-iframe-' + Date.now();
+      const existingIframe = document.getElementById(iframeId);
+      if (existingIframe) existingIframe.remove();
+
+      const iframe = document.createElement('iframe');
+      iframe.id = iframeId;
+      iframe.style.display = 'none';
+      document.body.appendChild(iframe);
+
+      const doc = iframe.contentWindow.document;
+      doc.open();
+      doc.write(receiptHTML);
+      doc.close();
+
+      setTimeout(() => {
+        iframe.contentWindow.focus();
+        iframe.contentWindow.print();
+        setTimeout(() => { 
+          if (document.body.contains(iframe)) document.body.removeChild(iframe); 
+        }, 1500);
+      }, 400);
+    }
   }
 
   const initiateReturn = (order) => {

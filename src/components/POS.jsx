@@ -567,7 +567,6 @@ export default function POS() {
     
     if (status === 'completed') {
       setReceiptModalOpen(true);
-      // 🖨️ Zobaze Style Auto-Print
       setTimeout(() => {
         printReceiptWindow(currentBillData);
       }, 200);
@@ -635,17 +634,9 @@ export default function POS() {
     } catch (err) { showToast('Share Error', 'error') }
   }
 
-  // 🖨️ INSTANT SILENT INVISIBLE IFRAME PRINTING (Zobaze Style)
+  // 🖨️ UNIVERSAL RECEIPT PRINTING (Auto-Detects Android RawBT / PC Iframe)
   const printReceiptWindow = (billData = lastBill) => {
     if (!billData) return;
-
-    const existingIframe = document.getElementById('pos-receipt-iframe');
-    if (existingIframe) existingIframe.remove();
-
-    const iframe = document.createElement('iframe');
-    iframe.id = 'pos-receipt-iframe';
-    iframe.style.display = 'none';
-    document.body.appendChild(iframe);
 
     const s = billSettings || {};
     const billSubtotal = billData.items.reduce((sum, i) => sum + ((i.originalPrice || i.price) * i.qty), 0);
@@ -799,18 +790,46 @@ export default function POS() {
       </html>
     `;
 
-    const doc = iframe.contentWindow.document;
-    doc.open();
-    doc.write(receiptHTML);
-    doc.close();
+    // 📱 Device Detection & Universal Printing
+    const userAgent = navigator.userAgent || navigator.vendor || window.opera;
+    const isAndroid = /android/i.test(userAgent);
 
-    setTimeout(() => {
-      iframe.contentWindow.focus();
-      iframe.contentWindow.print();
-      setTimeout(() => { 
-        if (document.body.contains(iframe)) document.body.removeChild(iframe); 
-      }, 1500);
-    }, 400);
+    if (isAndroid) {
+      // 🚀 ANDROID MODE: Print via RawBT
+      try {
+        const base64Html = btoa(unescape(encodeURIComponent(receiptHTML)));
+        const rawbtIntentUrl = `intent:base64,${base64Html}#Intent;scheme=rawbt;package=ru.a402d.rawbtprinter;end;`;
+        window.location.href = rawbtIntentUrl;
+      } catch (e) {
+        console.error('RawBT Print Error:', e);
+        if (typeof showToast === 'function') {
+           showToast('Printing failed. Please ensure RawBT app is installed.', 'error');
+        }
+      }
+    } else {
+      // 💻 PC/DESKTOP/iOS MODE: Invisible Iframe Printing
+      const iframeId = 'receipt-iframe-' + Date.now();
+      const existingIframe = document.getElementById(iframeId);
+      if (existingIframe) existingIframe.remove();
+
+      const iframe = document.createElement('iframe');
+      iframe.id = iframeId;
+      iframe.style.display = 'none';
+      document.body.appendChild(iframe);
+
+      const doc = iframe.contentWindow.document;
+      doc.open();
+      doc.write(receiptHTML);
+      doc.close();
+
+      setTimeout(() => {
+        iframe.contentWindow.focus();
+        iframe.contentWindow.print();
+        setTimeout(() => { 
+          if (document.body.contains(iframe)) document.body.removeChild(iframe); 
+        }, 1500);
+      }, 400);
+    }
   }
 
   const productPanel = (
