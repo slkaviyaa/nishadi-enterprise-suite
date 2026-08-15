@@ -10,6 +10,7 @@ import { FiEdit3, FiTrash2, FiPlus, FiMinus, FiX, FiUserCheck, FiUpload } from '
 import { jsPDF } from 'jspdf'
 import PageTemplate from './PageTemplate';
 
+const MAIN_BRANCH_ID = '11111111-1111-1111-1111-111111111111';
 const PARALLEL_BRANCH_ID = '22222222-2222-2222-2222-222222222222';
 
 export default function POS() {
@@ -61,6 +62,13 @@ export default function POS() {
   const taxRate = settings?.tax_rate || 0
   const scanRef = useRef(null)
 
+  const getSyncBranchId = () => {
+    if (!branch) return null
+    if (branch === MAIN_BRANCH_ID) return PARALLEL_BRANCH_ID
+    if (branch === PARALLEL_BRANCH_ID) return MAIN_BRANCH_ID
+    return null
+  }
+
   useEffect(() => {
     const checkMobile = () => setIsMobile(window.innerWidth < 1024)
     checkMobile()
@@ -73,8 +81,8 @@ export default function POS() {
     const { data, error } = await supabase.from('branch_products')
       .select('id, price, stock_quantity, products!inner(sku, name, prevent_out_of_stock_sale, auto_update_stock)')
       .eq('branch_id', branch)
-      .is('products.deleted_at', null) 
-      
+      .is('products.deleted_at', null)
+
     if (error) { showToast('Failed to load products', 'error'); return; }
     if (data) {
       const validProducts = data.filter(p => p.products !== null);
@@ -87,8 +95,41 @@ export default function POS() {
     }
   }
 
+  const loadHoldOrders = async (branchId) => {
+    if (!branchId) return
+    const { data, error } = await supabase.from('orders')
+      .select('id, total, created_at')
+      .eq('branch_id', branchId)
+      .eq('status', 'hold')
+      .order('created_at', { ascending: false })
+
+    if (error) {
+      console.error('Hold orders load error:', error)
+      setHoldOrders([])
+      return
+    }
+    setHoldOrders(data || [])
+  }
+
+  const loadBillSettings = async (branchId) => {
+    if (!branchId) return
+    const { data, error } = await supabase.from('bill_settings')
+      .select('*')
+      .eq('branch_id', branchId)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+
+    if (error) {
+      console.error('Bill settings load error:', error)
+      setBillSettings({})
+      return
+    }
+    if (data) setBillSettings(data)
+  }
+
   useEffect(() => {
-    fetchProducts();
+    fetchProducts()
     if (branch) {
       supabase.from('customers').select('*').eq('branch_id', branch).then(({ data }) => setCustomers(data || []))
       supabase.from('orders').select('id, total, created_at')
@@ -115,8 +156,8 @@ export default function POS() {
     if (newQty < 1) return
     const item = cart.find(i => i.id === id)
     const product = products.find(p => p.id === id)
-    if (item && item.preventOutOfStock && newQty > product.stock) {
-      showToast(`ඔබට ${newQty} ක් ලබාදිය නොහැක. දැනට ඇත්තේ ${product.stock} යි!`, 'error')
+    if (item && item.preventOutOfStock && (!product || newQty > product.stock)) {
+      showToast(`ඔබට ${newQty} ක් ලබාදිය නොහැක. දැනට ඇත්තේ ${product?.stock ?? 0} යි!`, 'error')
       return
     }
     setCart(prev => prev.map(item => item.id === id ? { ...item, qty: newQty } : item))
@@ -148,14 +189,11 @@ export default function POS() {
   const handleUpdateCartItem = () => {
     if (!selectedCartItem) return
     const product = products.find(p => p.id === selectedCartItem.id)
-    if (selectedCartItem.preventOutOfStock && editQty > product.stock) {
-      showToast(`⚠️ ප්රමාණය තොගයට වඩා වැඩියි. (ඇත්තේ ${product.stock} යි)`, 'error')
+    if (selectedCartItem.preventOutOfStock && (!product || editQty > product.stock)) {
+      showToast(`⚠️ ප්රමාණය තොගයට වඩා වැඩියි. (ඇත්තේ ${product?.stock ?? 0} යි)`, 'error')
       return
     }
-    setCart(prev => prev.map(item => {
-      if (item.id === selectedCartItem.id) return { ...item, price: Number(editPrice), qty: Number(editQty), applyOffer: applyOffer }
-      return item
-    }))
+    setCart(prev => prev.map(item => item.id === selectedCartItem.id ? { ...item, price: Number(editPrice), qty: Number(editQty), applyOffer } : item))
     setEditModalOpen(false)
     setSelectedCartItem(null)
   }
@@ -163,7 +201,7 @@ export default function POS() {
   const subtotal = cart.reduce((s, i) => s + (i.applyOffer ? i.price : i.originalPrice) * i.qty, 0)
   const taxAmount = taxEnabled ? (subtotal * taxRate / 100) : 0
   const total = subtotal + taxAmount
-  const final = total - discount
+  const final = Math.max(0, total - discount)
   const totalItemCount = cart.reduce((s, i) => s + i.qty, 0)
   
   const tenderedNum = parseFloat(cashTendered) || 0;
@@ -190,50 +228,59 @@ export default function POS() {
       if (!newCustName || !customerPhone) { showToast('Name and Phone required', 'error'); return; }
       if (!branch) { alert("❌ Error: Branch ID එක ඇවිත් නෑ."); return; }
 
-      const { data: c, error: mainErr } = await supabase.from('customers')
-        .insert({ branch_id: branch, name: newCustName, phone: customerPhone, address: newCustAddress || 'No Address' })
-        .select().single();
+      const { data: c, error: mainErr } = await supabase.from('customers').insert({
+        branch_id: branch, name: newCustName, phone: customerPhone, address: newCustAddress || 'No Address'
+      }).select().single()
 
       if (mainErr) { alert(`🔴 DATABASE ERROR:\n${mainErr.message}`); return; }
 
-      try {
-        const { data: existing } = await supabase.from('customers').select('id').eq('branch_id', PARALLEL_BRANCH_ID).eq('phone', customerPhone).maybeSingle()
-        if (!existing) await supabase.from('customers').insert({ branch_id: PARALLEL_BRANCH_ID, name: newCustName, phone: customerPhone, address: newCustAddress || 'No Address' })
-      } catch (err) {}
+      const syncBranchId = getSyncBranchId()
+      if (syncBranchId) {
+        const { data: existing, error: existingError } = await supabase.from('customers')
+          .select('id').eq('branch_id', syncBranchId).eq('phone', customerPhone).maybeSingle()
+
+        if (existingError) console.error('Customer sync lookup failed:', existingError)
+        else if (!existing) {
+          const { error: syncError } = await supabase.from('customers').insert({
+            branch_id: syncBranchId, name: newCustName, phone: customerPhone, address: newCustAddress || 'No Address'
+          })
+          if (syncError) console.error('Customer sync failed:', syncError)
+        }
+      }
 
       setCustomers(prev => [...prev, c])
       setSelectedCustomer(c)
       setNewCustName(''); setNewCustAddress(''); setNewCustomerForm(false)
       showToast('Customer created!', 'success')
-    } catch (e) { alert("🔴 SYSTEM ERROR:\n" + e.message); }
+    } catch (e) { alert("🔴 SYSTEM ERROR:\n" + e.message) }
   }
 
   const pickContact = async () => {
     if ('contacts' in navigator && 'ContactsManager' in window) {
       try {
-        const contacts = await navigator.contacts.select(['name', 'tel'], { multiple: false });
+        const contacts = await navigator.contacts.select(['name', 'tel'], { multiple: false })
         if (contacts && contacts.length > 0) {
-          const name = contacts[0].name ? contacts[0].name[0] : 'Cust';
-          const phone = contacts[0].tel ? contacts[0].tel[0].replace(/[^\d+]/g, '') : '';
+          const name = contacts[0].name ? contacts[0].name[0] : 'Cust'
+          const phone = contacts[0].tel ? contacts[0].tel[0].replace(/[^\d+]/g, '') : ''
           if (phone) {
-            const cust = customers.find(c => c.phone === phone);
-            if (cust) selectCustomerFromSearch(cust);
-            else { setCustomerPhone(phone); setNewCustName(name); setNewCustomerForm(true); }
+            const cust = customers.find(c => c.phone === phone)
+            if (cust) selectCustomerFromSearch(cust)
+            else { setCustomerPhone(phone); setNewCustName(name); setNewCustomerForm(true) }
           }
         }
-      } catch (err) { setCustomerModal(true); }
-    } else { setCustomerModal(true); }
+      } catch (err) { setCustomerModal(true) }
+    } else setCustomerModal(true)
   }
 
   const handlePickContactForModal = async () => {
     try {
-      const contacts = await navigator.contacts.select(['name', 'tel'], { multiple: false });
+      const contacts = await navigator.contacts.select(['name', 'tel'], { multiple: false })
       if (contacts && contacts.length > 0) {
-        setNewCustName(contacts[0].name ? contacts[0].name[0] : '');
-        setCustomerPhone(contacts[0].tel ? contacts[0].tel[0].replace(/[^0-9+]/g, '') : '');
+        setNewCustName(contacts[0].name ? contacts[0].name[0] : '')
+        setCustomerPhone(contacts[0].tel ? contacts[0].tel[0].replace(/[^0-9+]/g, '') : '')
       }
     } catch (err) {}
-  };
+  }
 
   const handleVcfUpload = (e) => {
     const file = e.target.files?.[0]
@@ -256,56 +303,105 @@ export default function POS() {
   }
 
   const checkout = async (status = 'completed') => {
-    if (cart.length === 0) return
-    
+    if (cart.length === 0 || !branch) return
+
     for (const item of cart) {
       if (item.preventOutOfStock) {
-        const { data: bp } = await supabase.from('branch_products').select('stock_quantity').eq('id', item.id).single()
-        if (!bp || bp.stock_quantity < item.qty) { showToast(`අවවාදයයි: ${item.name} සඳහා ප්රමාණවත් තොග නොමැත!`, 'error'); return }
+        const { data: bp, error: stockError } = await supabase.from('branch_products')
+          .select('stock_quantity').eq('id', item.id).eq('branch_id', branch).maybeSingle()
+        if (stockError || !bp || Number(bp.stock_quantity) < Number(item.qty)) {
+          showToast(`අවවාදයයි: ${item.name} සඳහා ප්‍රමාණවත් තොග නොමැත!`, 'error')
+          return
+        }
       }
     }
 
     let cid = selectedCustomer?.id
+    let customerForCredit = selectedCustomer
+
     if (!cid && customerPhone) {
-      const { data: nc } = await supabase.from('customers').insert({ branch_id: branch, phone: customerPhone, name: 'Cust ' + customerPhone.slice(-4) }).select().single()
-      if (nc) { cid = nc.id; setCustomers(prev => [...prev, nc]); setSelectedCustomer(nc) }
+      const { data: nc, error: customerError } = await supabase.from('customers')
+        .insert({ branch_id: branch, phone: customerPhone, name: 'Cust ' + customerPhone.slice(-4) }).select().single()
+      if (customerError) { showToast('Customer creation failed: ' + customerError.message, 'error'); return }
+      if (nc) { cid = nc.id; customerForCredit = nc; setCustomers(prev => [...prev, nc]); setSelectedCustomer(nc) }
     } else if (!cid && !customerPhone) {
-      const { data: walkIn } = await supabase.from('customers').select('id').eq('branch_id', branch).ilike('name', 'Walk-in Customer').maybeSingle();
-      if (walkIn) { cid = walkIn.id; } 
+      const { data: walkIn, error: walkInLookupError } = await supabase.from('customers')
+        .select('id, name, phone, total_credit').eq('branch_id', branch).ilike('name', 'Walk-in Customer').maybeSingle()
+      if (walkInLookupError) { showToast('Walk-in customer lookup failed: ' + walkInLookupError.message, 'error'); return }
+      if (walkIn) { cid = walkIn.id; customerForCredit = walkIn }
       else {
-        const { data: newWalkIn } = await supabase.from('customers').insert({ branch_id: branch, name: 'Walk-in Customer', phone: '0000000000', address: 'Walk-in' }).select().single();
-        if (newWalkIn) cid = newWalkIn.id;
+        const { data: newWalkIn, error: walkInCreateError } = await supabase.from('customers').insert({
+          branch_id: branch, name: 'Walk-in Customer', phone: '0000000000', address: 'Walk-in'
+        }).select().single()
+        if (walkInCreateError) { showToast('Walk-in customer creation failed: ' + walkInCreateError.message, 'error'); return }
+        if (newWalkIn) { cid = newWalkIn.id; customerForCredit = newWalkIn }
       }
     }
-    
+
     const { data: order, error: orderError } = await supabase.from('orders').insert({
       branch_id: branch, total: final, discount, status, customer_id: cid || null, payment_method: paymentMethod,
-      cheque_number: paymentMethod === 'cheque' ? chequeNumber : null, cheque_date: paymentMethod === 'cheque' ? chequeDate : null,
+      cheque_number: paymentMethod === 'cheque' ? chequeNumber : null,
+      cheque_date: paymentMethod === 'cheque' ? chequeDate : null,
       bank_reference: paymentMethod === 'bank_transfer' ? bankReference : null
     }).select().single()
 
     if (orderError) { showToast('Order failed: ' + orderError.message, 'error'); return }
-    
-    if (order) {
-      await supabase.from('order_items').insert(cart.map(i => ({ order_id: order.id, branch_product_id: i.id, quantity: i.qty, price: i.price })))
-      
-      for (const item of cart) { 
-        if (item.autoUpdateStock !== false) { 
-          try { await supabase.rpc('decrement_stock', { bp_id: item.id, qty: item.qty }); } catch (err) {}
-          const currentStock = Number(item.stock ?? 0);
-          const newStock = Math.max(0, currentStock - Number(item.qty || 1));
-          await supabase.from('branch_products').update({ stock_quantity: newStock }).eq('id', item.id);
-        } 
-      }
+    if (!order) return
 
-      if (status === 'completed') { try { await supabase.rpc('create_parallel_order', { main_order_id: order.id, target_branch_id: PARALLEL_BRANCH_ID }); } catch (err) {} }
-      
-      if (selectedCustomer && paymentMethod === 'credit' && status === 'completed') {
-        await supabase.from('credit_transactions').insert({
-          customer_id: selectedCustomer.id, branch_id: branch, amount: final, type: 'purchase',
-          due_date: creditDueDate || new Date(Date.now() + 30*24*60*60*1000).toISOString().split('T')[0], payment_mode: 'credit'
+    const { error: itemInsertError } = await supabase.from('order_items').insert(cart.map(i => ({
+      order_id: order.id, branch_product_id: i.id, quantity: i.qty, price: i.price
+    })))
+
+    if (itemInsertError) {
+      console.error('Order items insert failed:', itemInsertError)
+      await supabase.from('orders').delete().eq('id', order.id)
+      showToast('Bill failed: items could not be saved. No partial bill was kept.', 'error')
+      return
+    }
+
+    if (status === 'completed') {
+      for (const item of cart) {
+        if (item.autoUpdateStock === false) continue
+        const { error: stockRpcError } = await supabase.rpc('decrement_stock', { bp_id: item.id, qty: item.qty })
+        if (stockRpcError) {
+          const { data: current, error: readStockError } = await supabase.from('branch_products')
+            .select('stock_quantity').eq('id', item.id).eq('branch_id', branch).maybeSingle()
+          if (!readStockError && current) {
+            const nextStock = Math.max(0, Number(current.stock_quantity || 0) - Number(item.qty || 0))
+            const { error: stockUpdateError } = await supabase.from('branch_products').update({ stock_quantity: nextStock })
+              .eq('id', item.id).eq('branch_id', branch)
+            if (stockUpdateError) console.error('Stock fallback update failed:', stockUpdateError)
+          } else console.error('Stock read failed:', readStockError)
+        }
+      }
+    }
+
+    let syncFailed = false
+    if (status === 'completed') {
+      const syncBranchId = getSyncBranchId()
+      if (syncBranchId) {
+        const { error: syncError } = await supabase.rpc('create_parallel_order', {
+          main_order_id: order.id, target_branch_id: syncBranchId
         })
-        await supabase.from('customers').update({ total_credit: selectedCustomer.total_credit + final }).eq('id', selectedCustomer.id)
+        if (syncError) {
+          syncFailed = true
+          console.error('Parallel order sync failed:', syncError)
+          showToast('Main bill saved, but branch sync failed. Do not re-checkout this bill.', 'error')
+        }
+      }
+    }
+
+    if (cid && paymentMethod === 'credit' && status === 'completed') {
+      const currentCredit = Number(customerForCredit?.total_credit || 0)
+      const nextCredit = currentCredit + Number(final || 0)
+      const { error: creditTxError } = await supabase.from('credit_transactions').insert({
+        customer_id: cid, branch_id: branch, amount: final, type: 'purchase',
+        due_date: creditDueDate || new Date(Date.now() + 30*24*60*60*1000).toISOString().split('T')[0], payment_mode: 'credit'
+      })
+      const { error: creditUpdateError } = await supabase.from('customers').update({ total_credit: nextCredit }).eq('id', cid).eq('branch_id', branch)
+      if (creditTxError || creditUpdateError) {
+        console.error('Credit save error:', { creditTxError, creditUpdateError })
+        showToast('Bill saved, but credit details need attention.', 'error')
       }
 
       const currentBillData = { 
@@ -341,12 +437,20 @@ export default function POS() {
   }
 
   const loadHold = async (id) => {
-    const { data } = await supabase.from('order_items').select('branch_product_id, quantity, price, branch_products(products(name, prevent_out_of_stock_sale, auto_update_stock))').eq('order_id', id)
-    if (data) setCart(data.map(i => ({ id: i.branch_product_id, name: i.branch_products?.products?.name, price: i.price, originalPrice: i.price, qty: i.quantity, preventOutOfStock: i.branch_products?.products?.prevent_out_of_stock_sale ?? false, autoUpdateStock: i.branch_products?.products?.auto_update_stock ?? true })))
+    const { data, error } = await supabase.from('order_items')
+      .select('branch_product_id, quantity, price, branch_products(products(name, prevent_out_of_stock_sale, auto_update_stock))')
+      .eq('order_id', id)
+    if (error) { showToast('Failed to load held order: ' + error.message, 'error'); return }
+    if (data) setCart(data.map(i => ({
+      id: i.branch_product_id, name: i.branch_products?.products?.name, price: i.price, originalPrice: i.price,
+      qty: i.quantity, preventOutOfStock: i.branch_products?.products?.prevent_out_of_stock_sale ?? false,
+      autoUpdateStock: i.branch_products?.products?.auto_update_stock ?? true
+    })))
   }
 
   const deleteHoldOrder = async (orderId) => {
-    await supabase.from('orders').delete().eq('id', orderId)
+    const { error } = await supabase.from('orders').delete().eq('id', orderId)
+    if (error) { showToast('Failed to delete hold order: ' + error.message, 'error'); return }
     setHoldOrders(prev => prev.filter(o => o.id !== orderId))
   }
 
@@ -368,23 +472,20 @@ export default function POS() {
   }
 
   const shareLastBill = async () => {
-    if (!lastBill) return;
+    if (!lastBill) return
     try {
-      const doc = new jsPDF({ unit: 'mm', format: [80, 150] });
-      doc.setFontSize(12); doc.text(billSettings?.header_text || 'Nishadi Motors', 10, 10);
-      doc.setFontSize(8); doc.text(`Date: ${lastBill.date}`, 10, 16);
-      doc.line(10, 18, 70, 18); let y = 22;
-      lastBill.items.forEach(i => { doc.text(`${i.name} x${i.qty} - ${currency}${(i.price*i.qty).toFixed(2)}`, 10, y); y += 4; });
-      doc.line(10, y, 70, y); y += 4;
-      doc.text(`Total: ${currency}${lastBill.total.toFixed(2)}`, 10, y);
-      const pdfBlob = doc.output('blob');
-      const file = new File([pdfBlob], `receipt.pdf`, { type: 'application/pdf' });
-      if (navigator.canShare && navigator.canShare({ files: [file] })) {
-        await navigator.share({ title: 'Receipt', files: [file] });
-      } else {
-        window.open(`https://wa.me/?text=${encodeURIComponent(`*${billSettings?.header_text || 'Shop'}*\nTotal: ${currency}${lastBill.total.toFixed(2)}`)}`, '_blank');
-      }
-    } catch (err) { showToast('Share Error', 'error'); }
+      const doc = new jsPDF({ unit: 'mm', format: [80, 150] })
+      doc.setFontSize(12); doc.text(billSettings?.header_text || billSettings?.store_name || 'Nishadi Motors', 10, 10)
+      doc.setFontSize(8); doc.text(`Date: ${lastBill.date}`, 10, 16)
+      doc.line(10, 18, 70, 18); let y = 22
+      lastBill.items.forEach(i => { doc.text(`${i.name} x${i.qty} - ${currency}${(i.price*i.qty).toFixed(2)}`, 10, y); y += 4 })
+      doc.line(10, y, 70, y); y += 4
+      doc.text(`Total: ${currency}${lastBill.total.toFixed(2)}`, 10, y)
+      const pdfBlob = doc.output('blob')
+      const file = new File([pdfBlob], `receipt.pdf`, { type: 'application/pdf' })
+      if (navigator.canShare && navigator.canShare({ files: [file] })) await navigator.share({ title: 'Receipt', files: [file] })
+      else window.open(`https://wa.me/?text=${encodeURIComponent(`*${billSettings?.header_text || billSettings?.store_name || 'Shop'}*\nTotal: ${currency}${lastBill.total.toFixed(2)}`)}`, '_blank')
+    } catch (err) { showToast('Share Error', 'error') }
   }
 
   // 🖨️ INSTANT SILENT INVISIBLE IFRAME PRINTING (Zobaze Style)
@@ -567,51 +668,10 @@ export default function POS() {
 
   const productPanel = (
     <div className="bg-white dark:bg-gray-800 text-gray-900 dark:text-white rounded-xl shadow-2xl p-4 flex flex-col space-y-3 overflow-hidden min-h-0 flex-1">
-      <div className="flex gap-2">
-        <input className="flex-1 border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white text-base" placeholder="🔍 I want to sell..." value={search} onChange={e => setSearch(e.target.value)} />
-        <button className="px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition" onClick={startScanner}><BsUpcScan size={18} /></button>
-        {scanner && <button className="px-3 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition text-sm" onClick={stopScanner}>Stop</button>}
-      </div>
+      <div className="flex gap-2"><input className="flex-1 border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white text-base" placeholder="🔍 I want to sell..." value={search} onChange={e=>setSearch(e.target.value)} /><button className="px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition" onClick={startScanner}><BsUpcScan size={18}/></button>{scanner&&<button className="px-3 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition text-sm" onClick={stopScanner}>Stop</button>}</div>
       <div id="reader" className={`w-full ${scanner ? '' : 'hidden'}`} />
-      {products.length === 0 ? (
-        <div className="flex-1 flex items-center justify-center text-center opacity-50 dark:text-gray-400">📦 No products found.</div>
-      ) : (
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 overflow-y-auto flex-1 min-h-0 pr-1">
-          {products.filter(p => p.name?.toLowerCase().includes(search.toLowerCase()) || p.sku?.toLowerCase().includes(search.toLowerCase())).map(p => {
-            const cartItem = cart.find(i => i.id === p.id)
-            const inCartQty = cartItem ? cartItem.qty : 0
-            const currentLiveStock = p.stock - inCartQty
-            const isOutOfStock = currentLiveStock <= 0
-
-            return (
-              <button key={p.id} className={`relative p-3 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-100 dark:bg-gray-700 transition text-left shadow-sm flex flex-col justify-between ${inCartQty > 0 ? 'ring-2 ring-blue-500 bg-blue-50 dark:bg-gray-700' : 'bg-white dark:bg-gray-800 text-gray-900 dark:text-white'} ${isOutOfStock && p.preventOutOfStock ? 'opacity-60 cursor-not-allowed' : ''}`} onClick={() => addToCart(p)}>
-                {inCartQty > 0 && <span className="absolute top-2 right-2 bg-blue-600 text-white font-extrabold text-xs px-2 py-0.5 rounded-full">x {inCartQty}</span>}
-                <div>
-                  <div className="font-semibold text-sm sm:text-base mt-2 line-clamp-2">{p.name}</div>
-                  <div className="text-[10px] text-gray-500 dark:text-gray-400 mt-0.5">SKU: {p.sku || 'N/A'}</div>
-                </div>
-                <div className="text-xs sm:text-sm opacity-70 mt-2">{currency}{p.price} | Stock: <span className={isOutOfStock ? "text-red-500 font-bold" : "font-bold text-blue-400"}>{currentLiveStock}</span></div>
-              </button>
-            )
-          })}
-        </div>
-      )}
-      {holdOrders.length > 0 && (
-        <div className="bg-gray-100 dark:bg-gray-700 rounded-lg p-3 mt-2 border border-gray-200 dark:border-gray-600">
-          <h4 className="font-medium text-sm mb-2 text-gray-900 dark:text-white">📌 Hold Orders ({holdOrders.length})</h4>
-          <div className="space-y-2 max-h-40 overflow-y-auto">
-            {holdOrders.map(o => (
-              <div key={o.id} className="flex items-center justify-between bg-white dark:bg-gray-800 p-2 rounded border border-gray-200 dark:border-gray-600 text-sm">
-                <div className="text-gray-900 dark:text-white"><span className="font-semibold">#{o.id.slice(0,6)}</span><span className="ml-2">{currency}{o.total}</span></div>
-                <div className="flex gap-1">
-                  <button className="px-2 py-1 bg-blue-500 text-white rounded text-xs" onClick={() => loadHold(o.id)}>Load</button>
-                  <button className="px-2 py-1 bg-red-500 text-white rounded text-xs" onClick={() => deleteHoldOrder(o.id)}>Del</button>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+      {products.length===0?<div className="flex-1 flex items-center justify-center text-center opacity-50 dark:text-gray-400">📦 No products found.</div>:<div className="grid grid-cols-2 sm:grid-cols-3 gap-2 overflow-y-auto flex-1 min-h-0 pr-1">{products.filter(p=>p.name?.toLowerCase().includes(search.toLowerCase())||p.sku?.toLowerCase().includes(search.toLowerCase())).map(p=>{const cartItem=cart.find(i=>i.id===p.id);const inCartQty=cartItem?cartItem.qty:0;const currentLiveStock=p.stock-inCartQty;const isOutOfStock=currentLiveStock<=0;return <button key={p.id} className={`relative p-3 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-100 dark:bg-gray-700 transition text-left shadow-sm flex flex-col justify-between ${inCartQty>0?'ring-2 ring-blue-500 bg-blue-50 dark:bg-gray-700':'bg-white dark:bg-gray-800 text-gray-900 dark:text-white'} ${isOutOfStock&&p.preventOutOfStock?'opacity-60 cursor-not-allowed':''}`} onClick={()=>addToCart(p)}>{inCartQty>0&&<span className="absolute top-2 right-2 bg-blue-600 text-white font-extrabold text-xs px-2 py-0.5 rounded-full">x {inCartQty}</span>}<div><div className="font-semibold text-sm sm:text-base mt-2 line-clamp-2">{p.name}</div><div className="text-[10px] text-gray-500 dark:text-gray-400 mt-0.5">SKU: {p.sku||'N/A'}</div></div><div className="text-xs sm:text-sm opacity-70 mt-2">{currency}{p.price} | Stock: <span className={isOutOfStock?'text-red-500 font-bold':'font-bold text-blue-400'}>{currentLiveStock}</span></div></button>})}</div>}
+      {holdOrders.length>0&&<div className="bg-gray-100 dark:bg-gray-700 rounded-lg p-3 mt-2 border border-gray-200 dark:border-gray-600"><h4 className="font-medium text-sm mb-2 text-gray-900 dark:text-white">📌 Hold Orders ({holdOrders.length})</h4><div className="space-y-2 max-h-40 overflow-y-auto">{holdOrders.map(o=><div key={o.id} className="flex items-center justify-between bg-white dark:bg-gray-800 p-2 rounded border border-gray-200 dark:border-gray-600 text-sm"><div className="text-gray-900 dark:text-white"><span className="font-semibold">#{o.id.slice(0,6)}</span><span className="ml-2">{currency}{o.total}</span></div><div className="flex gap-1"><button className="px-2 py-1 bg-blue-500 text-white rounded text-xs" onClick={()=>loadHold(o.id)}>Load</button><button className="px-2 py-1 bg-red-500 text-white rounded text-xs" onClick={()=>deleteHoldOrder(o.id)}>Del</button></div></div>)}</div></div>}
     </div>
   )
 

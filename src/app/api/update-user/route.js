@@ -1,4 +1,4 @@
-export const dynamic = 'force-static'
+export const dynamic = 'force-dynamic'
 import { createClient } from '@supabase/supabase-js'
 
 const supabaseAdmin = createClient(
@@ -7,6 +7,8 @@ const supabaseAdmin = createClient(
 )
 
 export async function PUT(request) {
+  try {
+    const { userId, username, password, role, branch_id, permissions } = await request.json()
   try {
     const { userId, username, password, role, branch_id, permissions } = await request.json()
 
