@@ -76,6 +76,85 @@ export default function POS() {
     return () => window.removeEventListener('resize', checkMobile)
   }, [])
 
+  // 🔄 Offline Sync Handler on Network Status Change
+  useEffect(() => {
+    const handleOnlineSync = async () => {
+      const offlineBills = JSON.parse(localStorage.getItem('offline_bills') || '[]');
+      if (offlineBills.length === 0) return;
+
+      showToast('🌐 Internet connected! Syncing offline bills...', 'info');
+      const remainingBills = [];
+
+      for (const billData of offlineBills) {
+        try {
+          const { data: order, error: orderError } = await supabase.from('orders').insert({
+            branch_id: billData.branch,
+            total: billData.final,
+            discount: billData.discount,
+            status: billData.status,
+            customer_id: billData.cid || null,
+            payment_method: billData.paymentMethod,
+            cheque_number: billData.chequeNumber,
+            cheque_date: billData.chequeDate,
+            bank_reference: billData.bankReference
+          }).select().single();
+
+          if (orderError || !order) {
+            remainingBills.push(billData);
+            continue;
+          }
+
+          const { error: itemInsertError } = await supabase.from('order_items').insert(billData.cart.map(i => ({
+            order_id: order.id,
+            branch_product_id: i.id,
+            quantity: i.qty,
+            price: i.price
+          })));
+
+          if (itemInsertError) {
+            await supabase.from('orders').delete().eq('id', order.id);
+            remainingBills.push(billData);
+            continue;
+          }
+
+          if (billData.status === 'completed') {
+            for (const item of billData.cart) {
+              if (item.autoUpdateStock === false) continue;
+              await supabase.rpc('decrement_stock', { bp_id: item.id, qty: item.qty });
+            }
+
+            const syncBranchId = billData.syncBranchId;
+            if (syncBranchId) {
+              await supabase.rpc('create_parallel_order', {
+                main_order_id: order.id,
+                target_branch_id: syncBranchId
+              });
+            }
+          }
+        } catch (err) {
+          remainingBills.push(billData);
+        }
+      }
+
+      localStorage.setItem('offline_bills', JSON.stringify(remainingBills));
+      if (remainingBills.length === 0) {
+        showToast('✅ All offline bills successfully synced!', 'success');
+      } else {
+        showToast(`⚠️ Some bills failed to sync. Remaining: ${remainingBills.length}`, 'error');
+      }
+      fetchProducts();
+    };
+
+    window.addEventListener('online', handleOnlineSync);
+    if (navigator.onLine) {
+      handleOnlineSync();
+    }
+
+    return () => {
+      window.removeEventListener('online', handleOnlineSync);
+    };
+  }, [branch]);
+
   const fetchProducts = async () => {
     if (!branch) return;
     const { data, error } = await supabase.from('branch_products')
@@ -83,15 +162,24 @@ export default function POS() {
       .eq('branch_id', branch)
       .is('products.deleted_at', null)
 
-    if (error) { showToast('Failed to load products', 'error'); return; }
+    if (error) { 
+      // Fallback to local cached products if offline
+      const cached = localStorage.getItem(`cached_products_${branch}`);
+      if (cached) {
+        setProducts(JSON.parse(cached));
+      }
+      return; 
+    }
     if (data) {
       const validProducts = data.filter(p => p.products !== null);
-      setProducts(validProducts.map(p => ({
+      const mapped = validProducts.map(p => ({
         id: p.id, sku: p.products?.sku, name: p.products?.name,
         price: p.price, stock: p.stock_quantity,
         preventOutOfStock: p.products?.prevent_out_of_stock_sale ?? false,
         autoUpdateStock: p.products?.auto_update_stock ?? true
-      })))
+      }));
+      setProducts(mapped);
+      localStorage.setItem(`cached_products_${branch}`, JSON.stringify(mapped));
     }
   }
 
@@ -305,6 +393,40 @@ export default function POS() {
   const checkout = async (status = 'completed') => {
     if (cart.length === 0 || !branch) return
 
+    let cid = selectedCustomer?.id
+    let customerForCredit = selectedCustomer
+
+    // 🌐 Offline Mode Check
+    if (!navigator.onLine) {
+      const offlineBill = {
+        branch, cart, final, discount, status, cid, paymentMethod,
+        chequeNumber: paymentMethod === 'cheque' ? chequeNumber : null,
+        chequeDate: paymentMethod === 'cheque' ? chequeDate : null,
+        bank_reference: paymentMethod === 'bank_transfer' ? bankReference : null,
+        syncBranchId: getSyncBranchId(),
+        date: new Date().toLocaleDateString('en-GB') + ' ' + new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}),
+        id: 'OFFLINE-' + Date.now(),
+        customer: selectedCustomer || { name: 'Walk-in Customer', phone: customerPhone },
+        cashTendered: tenderedNum,
+        balanceDue: balanceDue
+      };
+
+      const existingOffline = JSON.parse(localStorage.getItem('offline_bills') || '[]');
+      existingOffline.push(offlineBill);
+      localStorage.setItem('offline_bills', JSON.stringify(existingOffline));
+
+      setLastBill(offlineBill);
+      if (status === 'completed') {
+        setReceiptModalOpen(true);
+        setTimeout(() => { printReceiptWindow(offlineBill); }, 200);
+      }
+
+      showToast('📴 Offline: Bill saved locally and will sync when internet returns!', 'success');
+      setCart([]); setDiscount(0); 
+      setPaymentMethod('cash'); setChequeNumber(''); setChequeDate(''); setBankReference(''); setCreditDueDate(''); setCashTendered('')
+      return;
+    }
+
     for (const item of cart) {
       if (item.preventOutOfStock) {
         const { data: bp, error: stockError } = await supabase.from('branch_products')
@@ -315,9 +437,6 @@ export default function POS() {
         }
       }
     }
-
-    let cid = selectedCustomer?.id
-    let customerForCredit = selectedCustomer
 
     if (!cid && customerPhone) {
       const { data: nc, error: customerError } = await supabase.from('customers')
@@ -403,37 +522,37 @@ export default function POS() {
         console.error('Credit save error:', { creditTxError, creditUpdateError })
         showToast('Bill saved, but credit details need attention.', 'error')
       }
-
-      const currentBillData = { 
-        items: [...cart], 
-        total: final, 
-        discount: discount,
-        paymentMethod, 
-        cashTendered: tenderedNum,
-        balanceDue: balanceDue,
-        date: new Date().toLocaleDateString('en-GB') + ' ' + new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}),
-        id: order.id,
-        customer: selectedCustomer || { name: 'Walk-in Customer', phone: customerPhone }
-      };
-      setLastBill(currentBillData);
-      
-      if (status === 'completed') {
-        setReceiptModalOpen(true);
-        // 🖨️ Zobaze Style Auto-Print
-        setTimeout(() => {
-          printReceiptWindow(currentBillData);
-        }, 200);
-      }
-
-      if (status === 'hold') {
-        supabase.from('orders').select('id, total, created_at').eq('branch_id', branch).eq('status', 'hold').order('created_at', { ascending: false }).then(({ data }) => setHoldOrders(data || []))
-      }
-
-      showToast('Bill Cut Successfully!', 'success')
-      setCart([]); setDiscount(0); 
-      setPaymentMethod('cash'); setChequeNumber(''); setChequeDate(''); setBankReference(''); setCreditDueDate(''); setCashTendered('')
-      await fetchProducts();
     }
+
+    const currentBillData = { 
+      items: [...cart], 
+      total: final, 
+      discount: discount,
+      paymentMethod, 
+      cashTendered: tenderedNum,
+      balanceDue: balanceDue,
+      date: new Date().toLocaleDateString('en-GB') + ' ' + new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}),
+      id: order.id,
+      customer: selectedCustomer || { name: 'Walk-in Customer', phone: customerPhone }
+    };
+    setLastBill(currentBillData);
+    
+    if (status === 'completed') {
+      setReceiptModalOpen(true);
+      // 🖨️ Zobaze Style Auto-Print
+      setTimeout(() => {
+        printReceiptWindow(currentBillData);
+      }, 200);
+    }
+
+    if (status === 'hold') {
+      supabase.from('orders').select('id, total, created_at').eq('branch_id', branch).eq('status', 'hold').order('created_at', { ascending: false }).then(({ data }) => setHoldOrders(data || []))
+    }
+
+    showToast('Bill Cut Successfully!', 'success')
+    setCart([]); setDiscount(0); 
+    setPaymentMethod('cash'); setChequeNumber(''); setChequeDate(''); setBankReference(''); setCreditDueDate(''); setCashTendered('')
+    await fetchProducts();
   }
 
   const loadHold = async (id) => {
@@ -503,7 +622,7 @@ export default function POS() {
     const s = billSettings || {};
     const billSubtotal = billData.items.reduce((sum, i) => sum + ((i.originalPrice || i.price) * i.qty), 0);
     const billDiscount = billData.discount || (billSubtotal - billData.total);
-    const receiptId = billData.id ? billData.id.slice(0,6).toUpperCase() : Math.floor(Math.random() * 9000)+1000;
+    const receiptId = billData.id ? String(billData.id).slice(0,6).toUpperCase() : Math.floor(Math.random() * 9000)+1000;
     const receiptDate = billData.date;
     const custName = billData.customer?.name || 'Walk-in Customer';
     const custPhone = billData.customer?.phone || '';
