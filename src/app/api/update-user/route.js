@@ -1,52 +1,36 @@
-export const dynamic = 'force-dynamic'
-import { createClient } from '@supabase/supabase-js'
+import { NextResponse } from 'next/server';
+import { createClient } from '@supabase/supabase-js';
 
 const supabaseAdmin = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY
-)
+);
 
-export async function PUT(request) {
+export async function POST(request) {
   try {
-    const { userId, username, password, role, branch_id, permissions } = await request.json()
-  try {
-    const { userId, username, password, role, branch_id, permissions } = await request.json()
+    const body = await request.json();
+    const { userId, password, email, data } = body;
 
     if (!userId) {
-      return Response.json({ error: 'User ID is required' }, { status: 400 })
+      return NextResponse.json({ error: 'User ID is required' }, { status: 400 });
     }
 
-    // Prepare update payload (Handle empty branch_id properly to prevent foreign key violation)
-    const updateData = {
-      username,
-      role,
-      permissions,
-      branch_id: branch_id && branch_id !== '' ? branch_id : null
+    const updateFields = {};
+    if (password) updateFields.password = password;
+    if (email) updateFields.email = email;
+    if (data) updateFields.user_metadata = data;
+
+    const { data: user, error } = await supabaseAdmin.auth.admin.updateUserById(
+      userId,
+      updateFields
+    );
+
+    if (error) {
+      return NextResponse.json({ error: error.message }, { status: 400 });
     }
 
-    // Update staff record
-    const { error: staffError } = await supabaseAdmin
-      .from('staff')
-      .update(updateData)
-      .eq('id', userId)
-
-    if (staffError) return Response.json({ error: staffError.message }, { status: 400 })
-
-    // If password provided, update auth user password
-    if (password && password.trim() !== '') {
-      const { error: authError } = await supabaseAdmin.auth.admin.updateUserById(userId, { password })
-      if (authError) return Response.json({ error: authError.message }, { status: 400 })
-    }
-
-    // If username changed, update hidden email accordingly
-    if (username) {
-      const hiddenEmail = `${username.trim().toLowerCase()}@nishadi.internal`
-      const { error: emailError } = await supabaseAdmin.auth.admin.updateUserById(userId, { email: hiddenEmail })
-      if (emailError) return Response.json({ error: emailError.message }, { status: 400 })
-    }
-
-    return Response.json({ success: true })
+    return NextResponse.json({ success: true, user });
   } catch (err) {
-    return Response.json({ error: err.message }, { status: 500 })
+    return NextResponse.json({ error: err.message }, { status: 500 });
   }
 }
