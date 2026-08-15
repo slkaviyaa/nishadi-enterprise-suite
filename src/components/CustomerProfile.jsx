@@ -1,10 +1,10 @@
 'use client'
 import { useState, useEffect } from 'react'
-import { supabase } from '../../lib/supabaseClient'
-import { useAuth } from '../../context/AuthContext'
-import { useToast } from '../../context/ToastContext'
+import { supabase } from '../lib/supabaseClient'
+import { useAuth } from '../context/AuthContext'
+import { useToast } from '../context/ToastContext'
 import { useRouter } from 'next/navigation'
-import PageTemplate from '../PageTemplate'
+import PageTemplate from './PageTemplate'
 
 export default function CustomerProfile({ customerId }) {
   const { branch } = useAuth()
