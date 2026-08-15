@@ -8,7 +8,7 @@ import {
   FiHome, FiPackage, FiUsers, FiBarChart2, FiUserCheck, FiShoppingCart,
   FiLogOut, FiUserPlus, FiSettings, FiGrid, FiToggleLeft,
   FiPercent, FiRepeat, FiFileText, FiDollarSign, FiTruck, FiCpu, FiX,
-  FiBookOpen, FiBriefcase, FiList, FiBook, FiDatabase
+  FiBookOpen, FiBriefcase, FiList, FiBook, FiDatabase, FiClock, FiUser, FiCreditCard
 } from 'react-icons/fi'
 
 export default function Sidebar({ onClose }) {
@@ -23,10 +23,18 @@ export default function Sidebar({ onClose }) {
 
   // Common modules
   if (settings?.pos_enabled !== false) menu.push({ href: '/pos', label: 'POS Terminal', icon: <FiHome /> })
+  
+  // 💳 Bill Payments Module (Added right below POS / Inventory for quick cashier access)
+  menu.push({ href: '/payments', label: 'Bill Payments', icon: <FiCreditCard /> })
+
   if (settings?.inventory_enabled !== false) menu.push({ href: '/inventory', label: 'Inventory', icon: <FiPackage /> })
   if (settings?.customers_enabled !== false) menu.push({ href: '/customers', label: 'Customers', icon: <FiUsers /> })
   if (settings?.reports_enabled !== false) menu.push({ href: '/reports', label: 'Reports', icon: <FiBarChart2 /> })
   if (settings?.staff_enabled !== false) menu.push({ href: '/staff', label: 'Staff & Expenses', icon: <FiUserCheck /> })
+  
+  // Attendance Module for all staff & owners
+  menu.push({ href: '/attendance', label: 'Attendance & Duty', icon: <FiClock /> })
+
   if (settings?.shop_enabled !== false) menu.push({ href: '/shop', label: 'ShopFront', icon: <FiShoppingCart /> })
 
   // Owner-only modules
@@ -100,17 +108,26 @@ export default function Sidebar({ onClose }) {
       {/* Footer Profile */}
       <div className="p-4 border-t border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-900 shrink-0">
         <div className="flex justify-between items-center mb-3 px-1">
-          <div className="flex flex-col">
-            <span className="font-bold text-sm text-gray-900 dark:text-white truncate max-w-[150px]">
-              {user?.display_name || 'User'}
-            </span>
-            <span className="text-[10px] font-bold text-blue-600 dark:text-blue-400 uppercase tracking-widest">
-              {user?.role || 'Staff'}
-            </span>
-          </div>
+          <Link 
+            href="/profile" 
+            onClick={onClose}
+            className="flex items-center gap-2.5 group flex-1 min-w-0 pr-2"
+          >
+            <div className="p-2 rounded-lg bg-blue-50 dark:bg-gray-800 text-blue-600 dark:text-blue-400 group-hover:bg-blue-100 dark:group-hover:bg-gray-700 transition-colors shrink-0">
+              <FiUser size={18} />
+            </div>
+            <div className="flex flex-col min-w-0">
+              <span className="font-bold text-sm text-gray-900 dark:text-white truncate group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">
+                {user?.display_name || 'User'}
+              </span>
+              <span className="text-[10px] font-bold text-blue-600 dark:text-blue-400 uppercase tracking-widest">
+                {user?.role || 'Staff'}
+              </span>
+            </div>
+          </Link>
           <button 
             onClick={logout} 
-            className="p-2.5 bg-red-100 hover:bg-red-200 dark:bg-red-900/30 dark:hover:bg-red-900/50 text-red-600 rounded-lg transition-colors" 
+            className="p-2.5 bg-red-100 hover:bg-red-200 dark:bg-red-900/30 dark:hover:bg-red-900/50 text-red-600 rounded-lg transition-colors shrink-0" 
             title="Logout"
           >
             <FiLogOut size={18} />

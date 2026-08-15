@@ -25,7 +25,7 @@ export default function POS() {
   const [selectedCustomer, setSelectedCustomer] = useState(null)
   const [holdOrders, setHoldOrders] = useState([])
   const [scanner, setScanner] = useState(null)
-  const [billSettings, setBillSettings] = useState({}) // 👈 Load custom bill settings
+  const [billSettings, setBillSettings] = useState({}) 
   
   const [customerPhone, setCustomerPhone] = useState('')
   const [newCustomerForm, setNewCustomerForm] = useState(false)
@@ -37,6 +37,7 @@ export default function POS() {
   const [chequeDate, setChequeDate] = useState('')
   const [bankReference, setBankReference] = useState('')
   const [creditDueDate, setCreditDueDate] = useState('')
+  const [cashTendered, setCashTendered] = useState('') 
   
   const [lastBill, setLastBill] = useState(null)
   const [receiptModalOpen, setReceiptModalOpen] = useState(false)
@@ -90,13 +91,12 @@ export default function POS() {
     fetchProducts();
     if (branch) {
       supabase.from('customers').select('*').eq('branch_id', branch).then(({ data }) => setCustomers(data || []))
-      supabase.from('orders').select('id, total, hold_note, created_at')
+      supabase.from('orders').select('id, total, created_at')
         .eq('branch_id', branch).eq('status', 'hold')
         .order('created_at', { ascending: false })
         .then(({ data }) => setHoldOrders(data || []))
       
-      // Load Custom Bill Settings
-      supabase.from('bill_settings').select('*').eq('branch_id', branch).single()
+      supabase.from('bill_settings').select('*').eq('branch_id', branch).maybeSingle()
         .then(({ data }) => { if (data) setBillSettings(data) })
     }
   }, [branch])
@@ -165,6 +165,9 @@ export default function POS() {
   const total = subtotal + taxAmount
   const final = total - discount
   const totalItemCount = cart.reduce((s, i) => s + i.qty, 0)
+  
+  const tenderedNum = parseFloat(cashTendered) || 0;
+  const balanceDue = paymentMethod === 'cash' ? Math.max(0, tenderedNum - final) : 0;
 
   const filteredCustomers = customers.filter(c => {
     if (!customerSearch.trim()) return false
@@ -308,23 +311,31 @@ export default function POS() {
       const currentBillData = { 
         items: [...cart], 
         total: final, 
+        discount: discount,
         paymentMethod, 
+        cashTendered: tenderedNum,
+        balanceDue: balanceDue,
         date: new Date().toLocaleDateString('en-GB') + ' ' + new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}),
-        id: order.id 
+        id: order.id,
+        customer: selectedCustomer || { name: 'Walk-in Customer', phone: customerPhone }
       };
       setLastBill(currentBillData);
       
       if (status === 'completed') {
         setReceiptModalOpen(true);
+        // 🖨️ Zobaze Style Auto-Print
+        setTimeout(() => {
+          printReceiptWindow(currentBillData);
+        }, 200);
       }
 
       if (status === 'hold') {
-        supabase.from('orders').select('id, total, hold_note, created_at').eq('branch_id', branch).eq('status', 'hold').order('created_at', { ascending: false }).then(({ data }) => setHoldOrders(data || []))
+        supabase.from('orders').select('id, total, created_at').eq('branch_id', branch).eq('status', 'hold').order('created_at', { ascending: false }).then(({ data }) => setHoldOrders(data || []))
       }
 
       showToast('Bill Cut Successfully!', 'success')
       setCart([]); setDiscount(0); 
-      setPaymentMethod('cash'); setChequeNumber(''); setChequeDate(''); setBankReference(''); setCreditDueDate('')
+      setPaymentMethod('cash'); setChequeNumber(''); setChequeDate(''); setBankReference(''); setCreditDueDate(''); setCashTendered('')
       await fetchProducts();
     }
   }
@@ -376,21 +387,35 @@ export default function POS() {
     } catch (err) { showToast('Share Error', 'error'); }
   }
 
-  // 🖨️ PERFECT INVISIBLE IFRAME PRINTING (Matches Custom Settings!)
-  const printReceiptWindow = () => {
-    if (!lastBill) return;
+  // 🖨️ INSTANT SILENT INVISIBLE IFRAME PRINTING (Zobaze Style)
+  const printReceiptWindow = (billData = lastBill) => {
+    if (!billData) return;
 
-    // 1. Create hidden iframe
+    const existingIframe = document.getElementById('pos-receipt-iframe');
+    if (existingIframe) existingIframe.remove();
+
     const iframe = document.createElement('iframe');
+    iframe.id = 'pos-receipt-iframe';
     iframe.style.display = 'none';
     document.body.appendChild(iframe);
 
-    // 2. Load configurations
     const s = billSettings || {};
-    const billSubtotal = lastBill.items.reduce((sum, i) => sum + (i.price * i.qty), 0);
-    const billDiscount = billSubtotal - lastBill.total;
+    const billSubtotal = billData.items.reduce((sum, i) => sum + ((i.originalPrice || i.price) * i.qty), 0);
+    const billDiscount = billData.discount || (billSubtotal - billData.total);
+    const receiptId = billData.id ? billData.id.slice(0,6).toUpperCase() : Math.floor(Math.random() * 9000)+1000;
+    const receiptDate = billData.date;
+    const custName = billData.customer?.name || 'Walk-in Customer';
+    const custPhone = billData.customer?.phone || '';
+    const validItems = billData.items;
+    const totalQty = validItems.reduce((sum, i) => sum + i.qty, 0);
+    const billTotal = billData.total;
+    const paymentMethod = billData.paymentMethod;
+    const cashTenderedVal = paymentMethod === 'cash' ? (billData.cashTendered || billTotal) : billTotal;
+    const balanceDueVal = Math.max(0, cashTenderedVal - billTotal);
 
-    // 3. Build HTML tailored exactly for Thermal Printers
+    const qrText = `INV:${s.bill_number_prefix || 'INV-'}${receiptId}|Total:${billTotal.toFixed(2)}|Date:${receiptDate}`;
+    const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(qrText)}`;
+
     const receiptHTML = `
       <!DOCTYPE html>
       <html>
@@ -412,69 +437,68 @@ export default function POS() {
           .text-center { text-align: center; }
           .font-bold { font-weight: bold; }
           .flex { display: flex; justify-content: space-between; align-items: flex-end; }
-          .border-b { border-bottom: 1px dashed black; margin: 4px 0; }
-          .border-t { border-top: 1px dotted black; margin-top: 4px; padding-top: 4px; }
-          table { width: 100%; border-collapse: collapse; margin-top: 2px; }
-          th, td { text-align: left; padding: 2px 0; font-size: 10px; }
-          .text-right { text-align: right; }
-          .text-center-td { text-align: center; }
+          .border-b { border-bottom: 1px dashed black; margin: 4px 0; padding-bottom: 2px; }
+          .border-t { border-top: 1px dashed black; margin-top: 4px; padding-top: 4px; }
+          .item-name { font-weight: bold; margin-bottom: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+          .item-row { display: flex; justify-content: space-between; margin-bottom: 6px; font-size: 10px; }
+          .col-mrp { width: 33%; text-align: left; }
+          .col-rate { width: 25%; text-align: center; }
+          .col-qty { width: 16%; text-align: center; }
+          .col-amt { width: 25%; text-align: right; }
           .text-xs { font-size: 9px; }
         </style>
       </head>
       <body>
         ${s.show_logo !== false && s.logo_url ? `<div class="text-center" style="margin-bottom: 5px;"><img src="${s.logo_url}" style="height: 50px; filter: grayscale(100%);" /></div>` : ''}
-        
         ${s.show_greeting !== false ? `<div class="text-center font-bold" style="font-size: 14px; margin-bottom: 2px;">${s.greeting_text || 'ආයුබෝවන්'}</div>` : ''}
-        
         ${s.show_header !== false ? `<div class="text-center font-bold" style="font-size: 16px; margin-bottom: 5px;">${s.header_text || 'SHOP NAME'}</div>` : ''}
-        
         ${s.show_contact !== false ? `<div class="text-center text-xs" style="margin-bottom: 8px; white-space: pre-wrap;">${s.contact_info || ''}</div>` : ''}
-        
         ${s.show_tax_no !== false && s.tax_number ? `<div class="text-center text-xs" style="margin-bottom: 4px;">VAT/TAX: ${s.tax_number}</div>` : ''}
 
         ${(s.show_bill_no !== false || s.show_date_time !== false) ? `
         <div class="flex text-xs" style="margin-bottom: 4px;">
-          ${s.show_bill_no !== false ? `<div>${s.bill_number_prefix || 'INV-'}${lastBill.id ? lastBill.id.slice(0,6).toUpperCase() : Math.floor(Math.random() * 9000)+1000}</div>` : '<div></div>'}
-          ${s.show_date_time !== false ? `<div>${lastBill.date}</div>` : ''}
+          ${s.show_bill_no !== false ? `<div><b>Bill No:</b> ${s.bill_number_prefix || 'INV-'}${receiptId}</div>` : '<div></div>'}
+          ${s.show_date_time !== false ? `<div>${receiptDate}</div>` : ''}
         </div>` : ''}
 
-        ${s.show_customer_info !== false && (selectedCustomer || customerPhone) ? `
+        ${s.show_customer_info !== false && custName ? `
         <div class="text-xs" style="margin-bottom: 4px; word-break: break-word;">
-          ${selectedCustomer ? `<div>Customer: ${selectedCustomer.name}</div>` : ''}
-          ${customerPhone ? `<div>Phone: ${customerPhone}</div>` : ''}
+          <div>Customer: ${custName}</div>
+          ${custPhone ? `<div>Phone: ${custPhone}</div>` : ''}
         </div>` : ''}
 
         <div class="border-b"></div>
 
         ${s.show_table_headers !== false ? `
-        <table>
-          <thead>
-            <tr style="border-bottom: 1px dashed black;">
-              <th>Item</th>
-              <th class="text-center-td">Rate</th>
-              <th class="text-center-td">Qty</th>
-              <th class="text-right">Amount</th>
-            </tr>
-          </thead>
-          <tbody>
-        ` : '<table><tbody>'}
-            ${lastBill.items.map(item => `
-              <tr>
-                <td style="max-width: 90px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${item.name}</td>
-                <td class="text-center-td">${item.price.toFixed(2)}</td>
-                <td class="text-center-td">${item.qty}</td>
-                <td class="text-right">${(item.price * item.qty).toFixed(2)}</td>
-              </tr>
-            `).join('')}
-          </tbody>
-        </table>
+        <div class="flex font-bold text-xs" style="margin-bottom: 4px;">
+          <div class="col-mrp">උපරිම<br/>සිල්ලර<br/>මිල</div>
+          <div class="col-rate" style="display:flex; align-items:flex-end; justify-content:center;">Rate</div>
+          <div class="col-qty" style="display:flex; align-items:flex-end; justify-content:center;">Qty</div>
+          <div class="col-amt" style="display:flex; align-items:flex-end; justify-content:flex-end;">Amount</div>
+        </div>
+        <div class="border-b"></div>
+        ` : ''}
 
-        <div class="border-b" style="margin-top: 5px;"></div>
+        <div style="margin-top: 4px;">
+          ${validItems.map(item => `
+            <div>
+              <div class="item-name">${item.name}</div>
+              <div class="item-row">
+                <div class="col-mrp">${(item.originalPrice || item.price).toFixed(2)}</div>
+                <div class="col-rate">${item.price.toFixed(2)}</div>
+                <div class="col-qty">${item.qty}</div>
+                <div class="col-amt">${(item.price * item.qty).toFixed(2)}</div>
+              </div>
+            </div>
+          `).join('')}
+        </div>
+
+        <div class="border-b"></div>
 
         ${s.show_total_items !== false ? `
         <div class="flex text-xs" style="margin-top: 4px;">
           <span>Total Items:</span>
-          <span>${lastBill.items.reduce((sum, i) => sum + i.qty, 0)}</span>
+          <span>${totalQty}</span>
         </div>` : ''}
 
         ${s.show_subtotal !== false ? `
@@ -482,27 +506,40 @@ export default function POS() {
           <span>Subtotal:</span>
           <span>${billSubtotal.toFixed(2)}</span>
         </div>
+        ${billDiscount > 0 ? `
         <div class="flex text-xs">
           <span>Discount:</span>
-          <span>${billDiscount.toFixed(2)}</span>
+          <span>-${billDiscount.toFixed(2)}</span>
         </div>` : ''}
+        ` : ''}
 
-        <div class="flex font-bold border-t" style="font-size: 14px;">
+        <div class="flex font-bold border-t" style="font-size: 14px; margin-top: 4px;">
           <span>TOTAL:</span>
-          <span>${currency}${lastBill.total.toFixed(2)}</span>
+          <span>${currency}${billTotal.toFixed(2)}</span>
         </div>
+
+        ${paymentMethod === 'cash' ? `
+        <div class="flex text-xs" style="margin-top: 3px;">
+          <span>Cash Tendered:</span>
+          <span>${currency}${cashTenderedVal.toFixed(2)}</span>
+        </div>
+        <div class="flex text-xs font-bold" style="margin-top: 2px;">
+          <span>Balance Due:</span>
+          <span>${currency}${balanceDueVal.toFixed(2)}</span>
+        </div>` : ''}
 
         ${s.show_payment_details !== false ? `
         <div class="flex text-xs" style="margin-top: 4px; color: #333;">
-          <span>Payment details:</span>
-          <span>${lastBill.paymentMethod.toUpperCase()}</span>
+          <span>Payment Method:</span>
+          <span>${paymentMethod.toUpperCase()}</span>
         </div>` : ''}
 
-        <div class="border-b"></div>
+        <div class="border-b" style="margin-top: 4px;"></div>
         
         ${s.show_dynamic_qr !== false ? `
         <div class="text-center" style="margin: 10px 0;">
-          <img src="https://api.qrserver.com/v1/create-qr-code/?size=100x100&data=${encodeURIComponent(`${s.header_text || 'Shop'}\nTotal: Rs.${lastBill.total.toFixed(2)}`)}" style="height: 60px; width: 60px; filter: grayscale(100%);" />
+          <img src="${qrUrl}" style="height: 60px; width: 60px; filter: grayscale(100%);" />
+          <div style="font-size: 8px; margin-top: 3px; color: #555;">Scan QR for Bill Info</div>
         </div>` : ''}
 
         ${s.show_footer !== false ? `
@@ -514,7 +551,6 @@ export default function POS() {
       </html>
     `;
 
-    // 4. Inject and Print
     const doc = iframe.contentWindow.document;
     doc.open();
     doc.write(receiptHTML);
@@ -523,8 +559,10 @@ export default function POS() {
     setTimeout(() => {
       iframe.contentWindow.focus();
       iframe.contentWindow.print();
-      setTimeout(() => { document.body.removeChild(iframe); }, 1000);
-    }, 500);
+      setTimeout(() => { 
+        if (document.body.contains(iframe)) document.body.removeChild(iframe); 
+      }, 1500);
+    }, 400);
   }
 
   const productPanel = (
@@ -649,6 +687,18 @@ export default function POS() {
         </div>
       </div>
 
+      {paymentMethod === 'cash' && (
+        <div className="mb-3">
+          <label className="block text-sm font-medium mb-1 text-gray-900 dark:text-white">Cash Tendered (මුදල් ලැබුණි)</label>
+          <input type="number" className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white text-base font-bold" placeholder="Enter Cash Given" value={cashTendered} onChange={e => setCashTendered(e.target.value)} />
+          {tenderedNum > 0 && (
+            <div className="mt-1 text-sm font-bold text-green-600 dark:text-green-400">
+              Balance to Return (ඉතුරු මුදල): {currency}{balanceDue.toFixed(2)}
+            </div>
+          )}
+        </div>
+      )}
+
       {paymentMethod === 'cheque' && (
         <div className="grid grid-cols-2 gap-2 mb-3">
           <input type="text" className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white text-sm" placeholder="Cheque Number" value={chequeNumber} onChange={e => setChequeNumber(e.target.value)} />
@@ -698,7 +748,7 @@ export default function POS() {
             <div className="text-center border-b border-gray-200 dark:border-gray-700 pb-3">
               <span className="text-3xl">🧾</span>
               <h3 className="text-xl font-extrabold mt-1">{billSettings?.header_text || 'Nishadi Motors'}</h3>
-              <p className="text-xs text-gray-500">Order Completed Successfully!</p>
+              <p className="text-xs text-gray-500">Order Completed & Auto-Printed!</p>
               <p className="text-xs text-gray-400 mt-1">{lastBill.date}</p>
             </div>
 
@@ -713,15 +763,27 @@ export default function POS() {
                 <span>Total Amount:</span>
                 <span className="text-green-600 dark:text-green-400">{currency}{lastBill.total.toFixed(2)}</span>
               </div>
+              {lastBill.paymentMethod === 'cash' && (
+                <>
+                  <div className="flex justify-between text-sm text-gray-500">
+                    <span>Cash Tendered:</span>
+                    <span>{currency}{lastBill.cashTendered.toFixed(2)}</span>
+                  </div>
+                  <div className="flex justify-between text-sm font-bold text-blue-600 dark:text-blue-400">
+                    <span>Balance Due:</span>
+                    <span>{currency}{lastBill.balanceDue.toFixed(2)}</span>
+                  </div>
+                </>
+              )}
               <div className="text-xs text-center text-gray-500 pt-1 uppercase">Payment: {lastBill.paymentMethod}</div>
             </div>
 
             <div className="grid grid-cols-2 gap-2 pt-2">
               <button 
-                onClick={printReceiptWindow} 
+                onClick={() => printReceiptWindow(lastBill)} 
                 className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-xl shadow-md transition flex items-center justify-center gap-2 text-sm"
               >
-                🖨️ Print Bill
+                🖨️ Print Again
               </button>
               
               <button 
@@ -743,7 +805,7 @@ export default function POS() {
         </div>
       )}
 
-      {/* Other Modals (Edit, Customer, etc.) remain below */}
+      {/* Edit Item Modal */}
       {editModalOpen && selectedCartItem && (
         <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
           <div className="bg-white dark:bg-gray-800 text-gray-900 dark:text-white rounded-2xl w-full max-w-md p-6 space-y-4 shadow-2xl border dark:border-gray-700">
@@ -770,6 +832,7 @@ export default function POS() {
         </div>
       )}
 
+      {/* Import Contact Modal */}
       {customerModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
           <div className="bg-white dark:bg-gray-800 text-gray-900 dark:text-white rounded-2xl w-full max-w-md p-6 shadow-2xl space-y-4 border dark:border-gray-700">
@@ -786,6 +849,7 @@ export default function POS() {
         </div>
       )}
 
+      {/* New Customer Modal */}
       {newCustomerForm && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
           <div className="bg-white dark:bg-gray-800 text-gray-900 dark:text-white rounded-xl shadow-2xl p-6 w-full max-w-md border dark:border-gray-700">

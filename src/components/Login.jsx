@@ -4,10 +4,9 @@ import { supabase } from '../lib/supabaseClient'
 import { useRouter } from 'next/navigation'
 import { useToast } from '../context/ToastContext'
 import Link from 'next/link'
-import PageTemplate from './PageTemplate';
 
 export default function Login() {
-  const [identifier, setIdentifier] = useState('') // Email එක හෝ Username එක
+  const [identifier, setIdentifier] = useState('') // Email eka ho Username eka
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
   const router = useRouter()
@@ -19,10 +18,10 @@ export default function Login() {
     e.preventDefault()
     setLoading(true)
 
-    // 💡 Username ට්‍රික් එක: යූසර් @ ගැහුවේ නැත්නම්, අපි @nishadi.com එකතු කරනවා
+    // 💡 Username trick: User '@' gahuwe nathnam, api '@nishadi.internal' ekathu karanawa
     let loginEmail = identifier.trim().toLowerCase()
     if (!loginEmail.includes('@')) {
-      loginEmail = `${loginEmail}@nishadi.com`
+      loginEmail = `${loginEmail}@nishadi.internal`
     }
 
     const { data, error } = await supabase.auth.signInWithPassword({

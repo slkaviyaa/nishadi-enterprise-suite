@@ -7,28 +7,44 @@ const supabaseAdmin = createClient(
 )
 
 export async function PUT(request) {
-  const { userId, username, password, role, branch_id, permissions } = await request.json()
+  try {
+    const { userId, username, password, role, branch_id, permissions } = await request.json()
 
-  // Update staff record (username, role, branch, permissions)
-  const { error: staffError } = await supabaseAdmin
-    .from('staff')
-    .update({ username, role, branch_id, permissions })
-    .eq('id', userId)
+    if (!userId) {
+      return Response.json({ error: 'User ID is required' }, { status: 400 })
+    }
 
-  if (staffError) return Response.json({ error: staffError.message }, { status: 400 })
+    // Prepare update payload (Handle empty branch_id properly to prevent foreign key violation)
+    const updateData = {
+      username,
+      role,
+      permissions,
+      branch_id: branch_id && branch_id !== '' ? branch_id : null
+    }
 
-  // If password provided, update auth user password
-  if (password) {
-    const { error: authError } = await supabaseAdmin.auth.admin.updateUserById(userId, { password })
-    if (authError) return Response.json({ error: authError.message }, { status: 400 })
+    // Update staff record
+    const { error: staffError } = await supabaseAdmin
+      .from('staff')
+      .update(updateData)
+      .eq('id', userId)
+
+    if (staffError) return Response.json({ error: staffError.message }, { status: 400 })
+
+    // If password provided, update auth user password
+    if (password && password.trim() !== '') {
+      const { error: authError } = await supabaseAdmin.auth.admin.updateUserById(userId, { password })
+      if (authError) return Response.json({ error: authError.message }, { status: 400 })
+    }
+
+    // If username changed, update hidden email accordingly
+    if (username) {
+      const hiddenEmail = `${username.trim().toLowerCase()}@nishadi.internal`
+      const { error: emailError } = await supabaseAdmin.auth.admin.updateUserById(userId, { email: hiddenEmail })
+      if (emailError) return Response.json({ error: emailError.message }, { status: 400 })
+    }
+
+    return Response.json({ success: true })
+  } catch (err) {
+    return Response.json({ error: err.message }, { status: 500 })
   }
-
-  // If username changed, update hidden email accordingly
-  if (username) {
-    const hiddenEmail = `${username}@nishadi.internal`
-    const { error: emailError } = await supabaseAdmin.auth.admin.updateUserById(userId, { email: hiddenEmail })
-    if (emailError) return Response.json({ error: emailError.message }, { status: 400 })
-  }
-
-  return Response.json({ success: true })
 }

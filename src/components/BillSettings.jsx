@@ -37,9 +37,8 @@ export default function BillSettings() {
     show_total_items: true,
     show_subtotal: true,
     show_payment_details: true,
-    show_dynamic_qr: false, // 👈 New Dynamic QR Toggle
-    show_footer: true,
-    show_watermark: true
+    show_dynamic_qr: false, 
+    show_footer: true
   })
   const [uploading, setUploading] = useState(false)
 
@@ -189,11 +188,10 @@ export default function BillSettings() {
             <Toggle label="Show Subtotal & Disc." value={form.show_subtotal} onChange={v => handleChange('show_subtotal', v)} />
             <Toggle label="Show Payment Details" value={form.show_payment_details} onChange={v => handleChange('show_payment_details', v)} />
             <Toggle label="Show Footer Message" value={form.show_footer} onChange={v => handleChange('show_footer', v)} />
-            <Toggle label="Show System Watermark" value={form.show_watermark} onChange={v => handleChange('show_watermark', v)} />
           </div>
         </div>
 
-        {/* COLUMN 3: Live Preview (Dynamic based on toggles) */}
+        {/* COLUMN 3: Live Preview (Dynamic based on toggles + Permanent Watermark) */}
         <div className="bg-gray-100 dark:bg-gray-900 p-6 rounded-xl shadow-inner border border-gray-300 dark:border-gray-700 flex flex-col items-center overflow-y-auto max-h-[750px] custom-scrollbar">
           <h3 className="font-bold text-gray-500 dark:text-gray-400 mb-4 uppercase tracking-widest text-xs sticky top-0">Live Receipt Preview</h3>
           
@@ -321,8 +319,11 @@ export default function BillSettings() {
               </div>
             )}
             
-            {/* 10. Watermark */}
-            {form.show_watermark && <div className="text-center text-[8px] text-gray-400 mt-3 opacity-70">System by Ceylon Digi Solutions</div>}
+            {/* 🔒 10. Permanent Non-Removable Watermark */}
+            <div className="text-center text-[8px] text-black mt-3 pt-2 border-t border-dotted border-black font-semibold leading-tight">
+              Powered by Nishadi Enterprise Suite.<br/>
+              Design & Developed by Ceylon Digi Solutions
+            </div>
           </div>
         </div>
 

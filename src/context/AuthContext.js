@@ -32,10 +32,18 @@ export function AuthProvider({ children }) {
         cache: 'no-store',
         headers: { Authorization: `Bearer ${authSession.access_token}` },
       })
+
+      // 401 Unauthorized ආවොත් කොන්සෝල් එකට එරර් නොදා නිහඬව හැdle කරයි
+      if (response.status === 401) {
+        setUser(null)
+        setBranch(null)
+        setLoading(false)
+        return
+      }
+
       const result = await response.json()
 
       if (!response.ok || !result.user) {
-        console.error('Current user lookup failed:', result.error || response.statusText)
         setUser(null)
         setBranch(null)
         setLoading(false)
@@ -46,7 +54,7 @@ export function AuthProvider({ children }) {
       setUser(staff)
       setBranch(staff.branch_id || DEFAULT_BRANCH_ID)
     } catch (error) {
-      console.error('Current user request failed:', error)
+      // සාමාන්‍ය network හෝ unauthorized എරර් වලදී app එක කඩන් වැටීම වළක්වයි
       setUser(null)
       setBranch(null)
     } finally {
