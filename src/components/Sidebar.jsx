@@ -42,7 +42,7 @@ export default function Sidebar({ onClose }) {
     if (settings?.users_enabled !== false) menu.push({ href: '/users', label: 'Users', icon: <FiUserPlus /> })
     if (settings?.bill_settings_enabled !== false) menu.push({ href: '/bill-settings', label: 'Bill Settings', icon: <FiSettings /> })
     menu.push({ href: '/discounts', label: 'Discounts', icon: <FiPercent /> })
-    menu.push({ href: '/stock-transfer', label: 'Stock Transfer', icon: <FiRepeat /> })
+    // Stock Transfer removed from here
     menu.push({ href: '/quotations', label: 'Quotations', icon: <FiFileText /> })
     menu.push({ href: '/cash-ledger', label: 'Cash Ledger', icon: <FiDollarSign /> })
     menu.push({ href: '/purchase-orders', label: 'Purchase Orders', icon: <FiTruck /> })

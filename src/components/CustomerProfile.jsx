@@ -1,9 +1,10 @@
 'use client'
 import { useState, useEffect } from 'react'
-import { supabase } from '../lib/supabaseClient'
-import { useAuth } from '../context/AuthContext'
-import { useToast } from '../context/ToastContext'
+import { supabase } from '../../lib/supabaseClient'
+import { useAuth } from '../../context/AuthContext'
+import { useToast } from '../../context/ToastContext'
 import { useRouter } from 'next/navigation'
+import PageTemplate from '../PageTemplate'
 
 export default function CustomerProfile({ customerId }) {
   const { branch } = useAuth()
@@ -15,8 +16,6 @@ export default function CustomerProfile({ customerId }) {
   const [modeFilter, setModeFilter] = useState('all')
   const [viewItems, setViewItems] = useState(null)
   const [returnOrder, setReturnOrder] = useState(null)
-  const [printModal, setPrintModal] = useState(false)
-  const [printContent, setPrintContent] = useState('')
   const [loading, setLoading] = useState(true)
   const [billSettings, setBillSettings] = useState({})
 
@@ -112,8 +111,18 @@ export default function CustomerProfile({ customerId }) {
     }
   }
 
-  // 🖨️ PERFECT INVISIBLE IFRAME PRINTING (All Toggles + Formatting Applied)
+  // 🖨️ PERFECT SILENT INVISIBLE IFRAME PRINTING (Zobaze Style)
   const printOrder = (order) => {
+    showToast('Preparing receipt...', 'info')
+    
+    const existingIframe = document.getElementById('customer-receipt-iframe');
+    if (existingIframe) existingIframe.remove();
+
+    const iframe = document.createElement('iframe');
+    iframe.id = 'customer-receipt-iframe';
+    iframe.style.display = 'none';
+    document.body.appendChild(iframe);
+
     const s = billSettings || {};
     const currency = 'Rs. ';
     const validItems = order.order_items || [];
@@ -286,8 +295,18 @@ export default function CustomerProfile({ customerId }) {
       </html>
     `;
     
-    setPrintContent(receiptHTML);
-    setPrintModal(true);
+    const doc = iframe.contentWindow.document;
+    doc.open();
+    doc.write(receiptHTML);
+    doc.close();
+
+    setTimeout(() => {
+      iframe.contentWindow.focus();
+      iframe.contentWindow.print();
+      setTimeout(() => { 
+        if (document.body.contains(iframe)) document.body.removeChild(iframe); 
+      }, 1500);
+    }, 400);
   }
 
   const initiateReturn = (order) => {
@@ -498,33 +517,6 @@ export default function CustomerProfile({ customerId }) {
               <button onClick={processReturn} className="px-4 py-2 bg-blue-600 text-white rounded-lg font-bold hover:bg-blue-700 transition">Confirm Return</button>
               <button onClick={() => setReturnOrder(null)} className="px-4 py-2 bg-gray-300 dark:bg-gray-700 rounded-lg hover:bg-gray-400 dark:hover:bg-gray-600 transition">Cancel</button>
             </div>
-          </div>
-        </div>
-      )}
-
-      {printModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => setPrintModal(false)}>
-          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-md p-5 animate-scaleIn" onClick={e => e.stopPropagation()}>
-            <div className="flex justify-between items-center mb-4">
-              <h3 className="font-bold text-lg text-gray-800 dark:text-white">🖨️ Receipt Preview</h3>
-              <button onClick={() => { const iframe = document.getElementById('printFrame'); if (iframe) iframe.contentWindow.print() }} className="px-4 py-1.5 bg-blue-600 text-white rounded-lg text-sm font-bold shadow-sm hover:bg-blue-700 transition">
-                Print
-              </button>
-            </div>
-            
-            <div className="bg-gray-100 dark:bg-gray-900 rounded-lg p-4 flex justify-center overflow-hidden border border-gray-200 dark:border-gray-700">
-              <iframe 
-                id="printFrame" 
-                srcDoc={printContent} 
-                className="bg-white shadow-md custom-scrollbar" 
-                style={{ width: '100%', height: '500px', maxWidth: '300px' }} 
-                title="Receipt Preview" 
-              />
-            </div>
-            
-            <button onClick={() => setPrintModal(false)} className="mt-4 w-full py-2 bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-white font-bold rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 transition">
-              Close
-            </button>
           </div>
         </div>
       )}
