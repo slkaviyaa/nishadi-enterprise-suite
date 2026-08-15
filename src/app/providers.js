@@ -20,12 +20,36 @@ function SyncManager() {
 
       for (const billData of offlineBills) {
         try {
+          let resolvedCid = billData.cid;
+
+          // 🔍 Safe Customer Resolution for Offline Bills
+          if (!resolvedCid && (billData.customerPhone || billData.customerName)) {
+            const phoneToLookup = billData.customerPhone || '0000000000';
+            const { data: existingCust } = await supabase.from('customers')
+              .select('id').eq('branch_id', billData.branch).eq('phone', phoneToLookup).maybeSingle();
+            
+            if (existingCust) {
+              resolvedCid = existingCust.id;
+            } else {
+              const { data: newCust, error: newCustErr } = await supabase.from('customers').insert({
+                branch_id: billData.branch,
+                name: billData.customerName || 'Walk-in Customer',
+                phone: phoneToLookup,
+                address: 'Offline Customer'
+              }).select().single();
+              
+              if (!newCustErr && newCust) {
+                resolvedCid = newCust.id;
+              }
+            }
+          }
+
           const { data: order, error: orderError } = await supabase.from('orders').insert({
             branch_id: billData.branch,
             total: billData.final,
             discount: billData.discount,
             status: billData.status,
-            customer_id: billData.cid || null,
+            customer_id: resolvedCid || null,
             payment_method: billData.paymentMethod,
             cheque_number: billData.chequeNumber,
             cheque_date: billData.chequeDate,

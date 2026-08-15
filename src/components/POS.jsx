@@ -87,12 +87,36 @@ export default function POS() {
 
       for (const billData of offlineBills) {
         try {
+          let resolvedCid = billData.cid;
+
+          // 🔍 Resolve or create customer if CID is missing but phone/name exists
+          if (!resolvedCid && (billData.customerPhone || billData.customerName)) {
+            const phoneToLookup = billData.customerPhone || '0000000000';
+            const { data: existingCust } = await supabase.from('customers')
+              .select('id').eq('branch_id', billData.branch).eq('phone', phoneToLookup).maybeSingle();
+            
+            if (existingCust) {
+              resolvedCid = existingCust.id;
+            } else {
+              const { data: newCust, error: newCustErr } = await supabase.from('customers').insert({
+                branch_id: billData.branch,
+                name: billData.customerName || 'Walk-in Customer',
+                phone: phoneToLookup,
+                address: 'Offline Customer'
+              }).select().single();
+              
+              if (!newCustErr && newCust) {
+                resolvedCid = newCust.id;
+              }
+            }
+          }
+
           const { data: order, error: orderError } = await supabase.from('orders').insert({
             branch_id: billData.branch,
             total: billData.final,
             discount: billData.discount,
             status: billData.status,
-            customer_id: billData.cid || null,
+            customer_id: resolvedCid || null,
             payment_method: billData.paymentMethod,
             cheque_number: billData.chequeNumber,
             cheque_date: billData.chequeDate,
@@ -396,17 +420,21 @@ export default function POS() {
     let cid = selectedCustomer?.id
     let customerForCredit = selectedCustomer
 
-    // 🌐 Offline Mode Check
+    // 🌐 Offline Mode Check with Safe Customer Data Capture
     if (!navigator.onLine) {
       const offlineBill = {
-        branch, cart, final, discount, status, cid, paymentMethod,
+        branch, cart, final, discount, status, 
+        cid: cid || null,
+        customerPhone: customerPhone || selectedCustomer?.phone || '',
+        customerName: selectedCustomer?.name || (customerPhone ? 'Cust ' + customerPhone.slice(-4) : 'Walk-in Customer'),
+        paymentMethod,
         chequeNumber: paymentMethod === 'cheque' ? chequeNumber : null,
         chequeDate: paymentMethod === 'cheque' ? chequeDate : null,
         bank_reference: paymentMethod === 'bank_transfer' ? bankReference : null,
         syncBranchId: getSyncBranchId(),
         date: new Date().toLocaleDateString('en-GB') + ' ' + new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}),
         id: 'OFFLINE-' + Date.now(),
-        customer: selectedCustomer || { name: 'Walk-in Customer', phone: customerPhone },
+        customer: selectedCustomer || { name: customerPhone ? 'Cust ' + customerPhone.slice(-4) : 'Walk-in Customer', phone: customerPhone },
         cashTendered: tenderedNum,
         balanceDue: balanceDue
       };
