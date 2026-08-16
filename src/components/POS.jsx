@@ -87,7 +87,6 @@ export default function POS() {
     const requestAppPermissions = async () => {
       if (Capacitor.isNativePlatform()) {
         try {
-          // 1. Request Contacts Permission
           const contactPerm = await Contacts.requestPermissions();
           if (contactPerm.contacts === 'granted') {
             const result = await Contacts.getContacts({ projection: { name: true, phones: true } });
@@ -417,6 +416,7 @@ export default function POS() {
     } catch (e) { alert("🔴 SYSTEM ERROR:\n" + e.message) }
   }
 
+  // 📇 Fixed Safe Contact Picker (No Crash Fallback)
   const pickContact = async () => {
     if (Capacitor.isNativePlatform()) {
       try {
@@ -433,10 +433,10 @@ export default function POS() {
             }
           }
         } else {
-          showToast('Contacts permission denied!', 'error');
+          setCustomerModal(true);
         }
       } catch (err) {
-        showToast('Error picking contact', 'error');
+        setCustomerModal(true);
       }
     } else {
       if ('contacts' in navigator && 'ContactsManager' in window) {
@@ -686,7 +686,7 @@ export default function POS() {
     setHoldOrders(prev => prev.filter(o => o.id !== orderId))
   }
 
-  // 📷 Native / Web Compatible Camera Scanner with Auto-Prompt
+  // 📷 Fixed Safe Camera Scanner (No Crash Fallback)
   const startScanner = async () => {
     if (scanRef.current) { 
       try { await scanRef.current.stop() } catch(e) {}; 
@@ -695,7 +695,8 @@ export default function POS() {
 
     try {
       if (typeof navigator !== 'undefined' && navigator?.mediaDevices?.getUserMedia) {
-        await navigator.mediaDevices.getUserMedia({ video: true });
+        const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+        stream.getTracks().forEach(track => track.stop());
       }
 
       const html5QrCode = new Html5Qrcode("reader")
@@ -714,7 +715,7 @@ export default function POS() {
       )
       setScanner(html5QrCode)
     } catch (err) { 
-      showToast('කැමරාව ආරම්භ කිරීමට නොහැක. (Camera Permission ලබා දෙන්න)', 'error'); 
+      showToast('කැමරාව ආරම්භ කිරීමට නොහැක. (Camera Permission අවශ්‍යයි)', 'error'); 
       setScanner(null) 
     }
   }
