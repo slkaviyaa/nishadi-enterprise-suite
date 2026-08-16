@@ -3,7 +3,7 @@ import { useState, useEffect } from 'react'
 import { supabase } from '../../lib/supabaseClient'
 import { useAuth } from '../../context/AuthContext'
 import { useToast } from '../../context/ToastContext'
-import PageTemplate from '../PageTemplate' // 👈 Fixed import
+import PageTemplate from '../PageTemplate'
 
 export default function JournalEntries() {
   const { branch } = useAuth()
@@ -57,36 +57,39 @@ export default function JournalEntries() {
       metrics={metrics}
     >
       <div className="space-y-6">
-        <div className="bg-white dark:bg-gray-800 p-6 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700">
+        <div className="bg-white dark:bg-gray-800 p-4 sm:p-6 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700">
           <h3 className="text-md font-semibold mb-4 text-gray-800 dark:text-white">New Journal Entry</h3>
-          <div className="flex flex-wrap gap-3 mb-4">
-            <input type="date" className="border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white" value={date} onChange={e => setDate(e.target.value)} />
-            <input className="border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white flex-1 min-w-[250px]" placeholder="Description (e.g. Opening Balance)" value={description} onChange={e => setDescription(e.target.value)} />
+          
+          <div className="flex flex-col sm:flex-row gap-3 mb-4">
+            <input type="date" className="border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white w-full sm:w-auto" value={date} onChange={e => setDate(e.target.value)} />
+            <input className="border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white flex-1 w-full" placeholder="Description (e.g. Opening Balance)" value={description} onChange={e => setDescription(e.target.value)} />
           </div>
 
-          <div className="space-y-2 mb-4">
+          <div className="space-y-3 mb-4">
             {lines.map((line, idx) => (
-              <div key={idx} className="flex gap-2 items-center bg-gray-50 dark:bg-gray-700/50 p-2 rounded-lg border dark:border-gray-600">
-                <select className="border border-gray-300 dark:border-gray-600 rounded px-3 py-2 text-sm bg-white dark:bg-gray-700 flex-1" value={line.account_id} onChange={e => updateLine(idx, 'account_id', e.target.value)}>
+              <div key={idx} className="flex flex-col sm:flex-row gap-2 sm:items-center bg-gray-50 dark:bg-gray-700/50 p-3 rounded-lg border dark:border-gray-600">
+                <select className="border border-gray-300 dark:border-gray-600 rounded px-3 py-2 text-sm bg-white dark:bg-gray-700 w-full sm:flex-1" value={line.account_id} onChange={e => updateLine(idx, 'account_id', e.target.value)}>
                   <option value="">Select Account</option>
                   {accounts.map(a => <option key={a.id} value={a.id}>{a.account_name}</option>)}
                 </select>
-                <input type="number" className="border border-gray-300 dark:border-gray-600 rounded px-3 py-2 text-sm bg-white dark:bg-gray-700 w-28" placeholder="Debit" value={line.debit || ''} onChange={e => updateLine(idx, 'debit', Number(e.target.value))} />
-                <input type="number" className="border border-gray-300 dark:border-gray-600 rounded px-3 py-2 text-sm bg-white dark:bg-gray-700 w-28" placeholder="Credit" value={line.credit || ''} onChange={e => updateLine(idx, 'credit', Number(e.target.value))} />
-                <button className="text-red-500 hover:bg-red-50 p-2 rounded" onClick={() => removeLine(idx)}>✕</button>
+                <div className="flex gap-2 w-full sm:w-auto mt-2 sm:mt-0">
+                  <input type="number" className="border border-gray-300 dark:border-gray-600 rounded px-3 py-2 text-sm bg-white dark:bg-gray-700 flex-1 sm:w-28" placeholder="Debit" value={line.debit || ''} onChange={e => updateLine(idx, 'debit', Number(e.target.value))} />
+                  <input type="number" className="border border-gray-300 dark:border-gray-600 rounded px-3 py-2 text-sm bg-white dark:bg-gray-700 flex-1 sm:w-28" placeholder="Credit" value={line.credit || ''} onChange={e => updateLine(idx, 'credit', Number(e.target.value))} />
+                  <button className="text-red-500 hover:bg-red-50 dark:hover:bg-gray-600 p-2 rounded transition" onClick={() => removeLine(idx)}>✕</button>
+                </div>
               </div>
             ))}
           </div>
           
-          <div className="flex gap-3 mt-4">
-            <button className="bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 text-gray-800 dark:text-white font-medium px-4 py-2 rounded-lg text-sm transition-colors" onClick={addLine}>+ Add Line</button>
-            <button className="bg-blue-600 hover:bg-blue-700 text-white font-medium px-6 py-2 rounded-lg transition-colors text-sm shadow-sm" onClick={saveEntry}>Save Entry</button>
+          <div className="flex flex-col sm:flex-row gap-3 mt-4">
+            <button className="bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 text-gray-800 dark:text-white font-medium px-4 py-3 sm:py-2 rounded-lg text-sm transition-colors w-full sm:w-auto" onClick={addLine}>+ Add Line</button>
+            <button className="bg-blue-600 hover:bg-blue-700 text-white font-medium px-6 py-3 sm:py-2 rounded-lg transition-colors text-sm shadow-sm w-full sm:w-auto" onClick={saveEntry}>Save Entry</button>
           </div>
         </div>
 
         <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 overflow-hidden">
           <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse">
+            <table className="w-full text-left border-collapse min-w-[500px]">
               <thead>
                 <tr className="bg-gray-50 dark:bg-gray-700/50 text-xs font-semibold text-gray-500 dark:text-gray-300 uppercase border-b dark:border-gray-700">
                   <th className="p-3">Date</th><th className="p-3">Description</th><th className="p-3">Entry ID</th>
@@ -95,7 +98,7 @@ export default function JournalEntries() {
               <tbody className="divide-y dark:divide-gray-700 text-sm">
                 {entries.length === 0 ? <tr><td colSpan="3" className="p-6 text-center text-gray-400">No journal entries found</td></tr> : entries.map(e => (
                   <tr key={e.id} className="hover:bg-gray-50/50 dark:hover:bg-gray-700/30">
-                    <td className="p-3">{e.date}</td><td className="p-3">{e.description}</td><td className="p-3 font-mono text-xs text-gray-500">#{e.id.slice(0,8)}</td>
+                    <td className="p-3 whitespace-nowrap">{e.date}</td><td className="p-3">{e.description}</td><td className="p-3 font-mono text-xs text-gray-500">#{e.id.slice(0,8)}</td>
                   </tr>
                 ))}
               </tbody>

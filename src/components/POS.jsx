@@ -6,11 +6,10 @@ import { useSettings } from '../context/SettingsContext'
 import { useToast } from '../context/ToastContext'
 import { Html5Qrcode } from 'html5-qrcode'
 import { BsUpcScan, BsWhatsapp } from 'react-icons/bs'
-import { FiEdit3, FiTrash2, FiPlus, FiMinus, FiX, FiUserCheck, FiUpload } from 'react-icons/fi'
+import { FiEdit3, FiTrash2, FiPlus, FiMinus, FiX, FiUserCheck, FiUpload, FiCamera } from 'react-icons/fi'
 import { jsPDF } from 'jspdf'
 import PageTemplate from './PageTemplate';
 
-// 🚀 Capacitor Native Plugins & Bluetooth Utility Imports
 import { Capacitor } from '@capacitor/core';
 import { Contacts } from '@capacitor-community/contacts';
 import { printNativeBluetooth } from '../utils/printerUtils';
@@ -31,7 +30,12 @@ export default function POS() {
   const [deviceContacts, setDeviceContacts] = useState([]) 
   const [selectedCustomer, setSelectedCustomer] = useState(null)
   const [holdOrders, setHoldOrders] = useState([])
+  
+  // 📷 Scanner States (New Modal Setup)
+  const [isScannerOpen, setIsScannerOpen] = useState(false)
   const [scanner, setScanner] = useState(null)
+  const scanRef = useRef(null)
+
   const [billSettings, setBillSettings] = useState({}) 
   
   const [customerPhone, setCustomerPhone] = useState('')
@@ -66,7 +70,6 @@ export default function POS() {
   const currency = settings?.currency_symbol || 'Rs. '
   const taxEnabled = settings?.tax_enabled || false
   const taxRate = settings?.tax_rate || 0
-  const scanRef = useRef(null)
 
   const getSyncBranchId = () => {
     if (!branch) return null
@@ -82,7 +85,6 @@ export default function POS() {
     return () => window.removeEventListener('resize', checkMobile)
   }, [])
 
-  // 🛡️ NATIVE RUNTIME PERMISSIONS & CONTACTS LOADER ON STARTUP
   useEffect(() => {
     const requestAppPermissions = async () => {
       if (Capacitor.isNativePlatform()) {
@@ -102,138 +104,65 @@ export default function POS() {
               setDeviceContacts(formatted);
             }
           }
-        } catch (err) {
-          console.error('Permission request error:', err);
-        }
+        } catch (err) {}
       }
     };
     requestAppPermissions();
   }, []);
 
-  // 🔄 Offline Sync Handler on Network Status Change
   useEffect(() => {
     const handleOnlineSync = async () => {
       const offlineBills = JSON.parse(localStorage.getItem('offline_bills') || '[]');
       if (offlineBills.length === 0) return;
-
       showToast('🌐 Internet connected! Syncing offline bills...', 'info');
       const remainingBills = [];
-
       for (const billData of offlineBills) {
         try {
           let resolvedCid = billData.cid;
-
           if (!resolvedCid && (billData.customerPhone || billData.customerName)) {
             const phoneToLookup = billData.customerPhone || '0000000000';
-            const { data: existingCust } = await supabase.from('customers')
-              .select('id').eq('branch_id', billData.branch).eq('phone', phoneToLookup).maybeSingle();
-            
-            if (existingCust) {
-              resolvedCid = existingCust.id;
-            } else {
-              const { data: newCust, error: newCustErr } = await supabase.from('customers').insert({
-                branch_id: billData.branch,
-                name: billData.customerName || 'Walk-in Customer',
-                phone: phoneToLookup,
-                address: 'Offline Customer'
-              }).select().single();
-              
-              if (!newCustErr && newCust) {
-                resolvedCid = newCust.id;
-              }
+            const { data: existingCust } = await supabase.from('customers').select('id').eq('branch_id', billData.branch).eq('phone', phoneToLookup).maybeSingle();
+            if (existingCust) resolvedCid = existingCust.id;
+            else {
+              const { data: newCust, error: newCustErr } = await supabase.from('customers').insert({ branch_id: billData.branch, name: billData.customerName || 'Walk-in Customer', phone: phoneToLookup, address: 'Offline Customer' }).select().single();
+              if (!newCustErr && newCust) resolvedCid = newCust.id;
             }
           }
-
-          const { data: order, error: orderError } = await supabase.from('orders').insert({
-            branch_id: billData.branch,
-            total: billData.final,
-            discount: billData.discount,
-            status: billData.status,
-            customer_id: resolvedCid || null,
-            payment_method: billData.paymentMethod,
-            cheque_number: billData.chequeNumber,
-            cheque_date: billData.chequeDate,
-            bank_reference: billData.bankReference
-          }).select().single();
-
-          if (orderError || !order) {
-            remainingBills.push(billData);
-            continue;
-          }
-
-          const { error: itemInsertError } = await supabase.from('order_items').insert(billData.cart.map(i => ({
-            order_id: order.id,
-            branch_product_id: i.id,
-            quantity: i.qty,
-            price: i.price
-          })));
-
-          if (itemInsertError) {
-            await supabase.from('orders').delete().eq('id', order.id);
-            remainingBills.push(billData);
-            continue;
-          }
-
+          const { data: order, error: orderError } = await supabase.from('orders').insert({ branch_id: billData.branch, total: billData.final, discount: billData.discount, status: billData.status, customer_id: resolvedCid || null, payment_method: billData.paymentMethod, cheque_number: billData.chequeNumber, cheque_date: billData.chequeDate, bank_reference: billData.bankReference }).select().single();
+          if (orderError || !order) { remainingBills.push(billData); continue; }
+          const { error: itemInsertError } = await supabase.from('order_items').insert(billData.cart.map(i => ({ order_id: order.id, branch_product_id: i.id, quantity: i.qty, price: i.price })));
+          if (itemInsertError) { await supabase.from('orders').delete().eq('id', order.id); remainingBills.push(billData); continue; }
           if (billData.status === 'completed') {
             for (const item of billData.cart) {
               if (item.autoUpdateStock === false) continue;
               await supabase.rpc('decrement_stock', { bp_id: item.id, qty: item.qty });
             }
-
             const syncBranchId = billData.syncBranchId;
-            if (syncBranchId) {
-              await supabase.rpc('create_parallel_order', {
-                main_order_id: order.id,
-                target_branch_id: syncBranchId
-              });
-            }
+            if (syncBranchId) await supabase.rpc('create_parallel_order', { main_order_id: order.id, target_branch_id: syncBranchId });
           }
-        } catch (err) {
-          remainingBills.push(billData);
-        }
+        } catch (err) { remainingBills.push(billData); }
       }
-
       localStorage.setItem('offline_bills', JSON.stringify(remainingBills));
-      if (remainingBills.length === 0) {
-        showToast('✅ All offline bills successfully synced!', 'success');
-      } else {
-        showToast(`⚠️ Some bills failed to sync. Remaining: ${remainingBills.length}`, 'error');
-      }
+      if (remainingBills.length === 0) showToast('✅ All offline bills successfully synced!', 'success');
+      else showToast(`⚠️ Some bills failed to sync. Remaining: ${remainingBills.length}`, 'error');
       fetchProducts();
     };
-
     window.addEventListener('online', handleOnlineSync);
-    if (navigator.onLine) {
-      handleOnlineSync();
-    }
-
-    return () => {
-      window.removeEventListener('online', handleOnlineSync);
-    };
+    if (navigator.onLine) handleOnlineSync();
+    return () => window.removeEventListener('online', handleOnlineSync);
   }, [branch]);
 
   const fetchProducts = async () => {
     if (!branch) return;
-    const { data, error } = await supabase.from('branch_products')
-      .select('id, price, stock_quantity, products!inner(sku, name, prevent_out_of_stock_sale, auto_update_stock)')
-      .eq('branch_id', branch)
-      .is('products.deleted_at', null)
-
+    const { data, error } = await supabase.from('branch_products').select('id, price, stock_quantity, products!inner(sku, name, prevent_out_of_stock_sale, auto_update_stock)').eq('branch_id', branch).is('products.deleted_at', null)
     if (error) { 
       const cached = localStorage.getItem(`cached_products_${branch}`);
-      if (cached) {
-        setProducts(JSON.parse(cached));
-      }
+      if (cached) setProducts(JSON.parse(cached));
       return; 
     }
     if (data) {
       const validProducts = data.filter(p => p.products !== null);
-      const mapped = validProducts.map(p => ({
-        id: p.id, sku: p.products?.sku, name: p.products?.name,
-        price: p.price, stock: p.stock_quantity,
-        preventOutOfStock: p.products?.prevent_out_of_stock_sale ?? false,
-        autoUpdateStock: p.products?.auto_update_stock ?? true
-      }));
+      const mapped = validProducts.map(p => ({ id: p.id, sku: p.products?.sku, name: p.products?.name, price: p.price, stock: p.stock_quantity, preventOutOfStock: p.products?.prevent_out_of_stock_sale ?? false, autoUpdateStock: p.products?.auto_update_stock ?? true }));
       setProducts(mapped);
       localStorage.setItem(`cached_products_${branch}`, JSON.stringify(mapped));
     }
@@ -241,34 +170,15 @@ export default function POS() {
 
   const loadHoldOrders = async (branchId) => {
     if (!branchId) return
-    const { data, error } = await supabase.from('orders')
-      .select('id, total, created_at')
-      .eq('branch_id', branchId)
-      .eq('status', 'hold')
-      .order('created_at', { ascending: false })
-
-    if (error) {
-      console.error('Hold orders load error:', error)
-      setHoldOrders([])
-      return
-    }
+    const { data, error } = await supabase.from('orders').select('id, total, created_at').eq('branch_id', branchId).eq('status', 'hold').order('created_at', { ascending: false })
+    if (error) { setHoldOrders([]); return }
     setHoldOrders(data || [])
   }
 
   const loadBillSettings = async (branchId) => {
     if (!branchId) return
-    const { data, error } = await supabase.from('bill_settings')
-      .select('*')
-      .eq('branch_id', branchId)
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle()
-
-    if (error) {
-      console.error('Bill settings load error:', error)
-      setBillSettings({})
-      return
-    }
+    const { data, error } = await supabase.from('bill_settings').select('*').eq('branch_id', branchId).order('created_at', { ascending: false }).limit(1).maybeSingle()
+    if (error) { setBillSettings({}); return }
     if (data) setBillSettings(data)
   }
 
@@ -276,22 +186,13 @@ export default function POS() {
     fetchProducts()
     if (branch) {
       supabase.from('customers').select('*').eq('branch_id', branch).then(({ data }) => setCustomers(data || []))
-      supabase.from('orders').select('id, total, created_at')
-        .eq('branch_id', branch).eq('status', 'hold')
-        .order('created_at', { ascending: false })
-        .then(({ data }) => setHoldOrders(data || []))
-      
-      supabase.from('bill_settings').select('*').eq('branch_id', branch).maybeSingle()
-        .then(({ data }) => { if (data) setBillSettings(data) })
+      supabase.from('orders').select('id, total, created_at').eq('branch_id', branch).eq('status', 'hold').order('created_at', { ascending: false }).then(({ data }) => setHoldOrders(data || []))
+      supabase.from('bill_settings').select('*').eq('branch_id', branch).maybeSingle().then(({ data }) => { if (data) setBillSettings(data) })
     }
   }, [branch])
 
   useEffect(() => {
-    const handler = (e) => {
-      if (customerDropdownRef.current && !customerDropdownRef.current.contains(e.target)) {
-        setShowCustomerDropdown(false)
-      }
-    }
+    const handler = (e) => { if (customerDropdownRef.current && !customerDropdownRef.current.contains(e.target)) setShowCustomerDropdown(false) }
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
   }, [])
@@ -300,20 +201,14 @@ export default function POS() {
     if (newQty < 1) return
     const item = cart.find(i => i.id === id)
     const product = products.find(p => p.id === id)
-    if (item && item.preventOutOfStock && (!product || newQty > product.stock)) {
-      showToast(`ඔබට ${newQty} ක් ලබාදිය නොහැක. දැනට ඇත්තේ ${product?.stock ?? 0} යි!`, 'error')
-      return
-    }
+    if (item && item.preventOutOfStock && (!product || newQty > product.stock)) { showToast(`ඔබට ${newQty} ක් ලබාදිය නොහැක. දැනට ඇත්තේ ${product?.stock ?? 0} යි!`, 'error'); return }
     setCart(prev => prev.map(item => item.id === id ? { ...item, qty: newQty } : item))
   }
 
   const addToCart = (prod) => {
     const exist = cart.find(i => i.id === prod.id)
     const currentCartQty = exist ? exist.qty : 0
-    if (prod.preventOutOfStock && currentCartQty + 1 > prod.stock) {
-      showToast(`⚠️ "${prod.name}" තොග අවසන්! (Available: ${prod.stock})`, 'error')
-      return
-    }
+    if (prod.preventOutOfStock && currentCartQty + 1 > prod.stock) { showToast(`⚠️ "${prod.name}" තොග අවසන්! (Available: ${prod.stock})`, 'error'); return }
     setCart(prev => {
       if (exist) return prev.map(i => i.id === prod.id ? { ...i, qty: i.qty + 1 } : i)
       return [...prev, { ...prod, qty: 1, originalPrice: prod.price, applyOffer: true }]
@@ -333,10 +228,7 @@ export default function POS() {
   const handleUpdateCartItem = () => {
     if (!selectedCartItem) return
     const product = products.find(p => p.id === selectedCartItem.id)
-    if (selectedCartItem.preventOutOfStock && (!product || editQty > product.stock)) {
-      showToast(`⚠️ ප්රමාණය තොගයට වඩා වැඩියි. (ඇත්තේ ${product?.stock ?? 0} යි)`, 'error')
-      return
-    }
+    if (selectedCartItem.preventOutOfStock && (!product || editQty > product.stock)) { showToast(`⚠️ ප්රමාණය තොගයට වඩා වැඩියි. (ඇත්තේ ${product?.stock ?? 0} යි)`, 'error'); return }
     setCart(prev => prev.map(item => item.id === selectedCartItem.id ? { ...item, price: Number(editPrice), qty: Number(editQty), applyOffer } : item))
     setEditModalOpen(false)
     setSelectedCartItem(null)
@@ -347,7 +239,6 @@ export default function POS() {
   const total = subtotal + taxAmount
   const final = Math.max(0, total - discount)
   const totalItemCount = cart.reduce((s, i) => s + i.qty, 0)
-  
   const tenderedNum = parseFloat(cashTendered) || 0;
   const balanceDue = paymentMethod === 'cash' ? Math.max(0, tenderedNum - final) : 0;
 
@@ -366,20 +257,8 @@ export default function POS() {
   }).slice(0, 5); 
 
   const selectCustomerFromSearch = (cust) => {
-    if (cust.isDeviceContact) {
-      setCustomerPhone(cust.phone || '');
-      setNewCustName(cust.name || '');
-      setNewCustomerForm(true);
-      setCustomerSearch('');
-      setShowCustomerDropdown(false);
-      showToast('Please add an address to save this contact to the system.', 'info');
-    } else {
-      setSelectedCustomer(cust)
-      setCustomerPhone(cust.phone || '')
-      setCustomerSearch('')
-      setShowCustomerDropdown(false)
-      setCustomerModal(false)
-    }
+    if (cust.isDeviceContact) { setCustomerPhone(cust.phone || ''); setNewCustName(cust.name || ''); setNewCustomerForm(true); setCustomerSearch(''); setShowCustomerDropdown(false); showToast('Please add an address to save this contact to the system.', 'info'); } 
+    else { setSelectedCustomer(cust); setCustomerPhone(cust.phone || ''); setCustomerSearch(''); setShowCustomerDropdown(false); setCustomerModal(false); }
   }
 
   const clearCustomer = () => { setSelectedCustomer(null); setCustomerPhone(''); setCustomerSearch('') }
@@ -388,27 +267,17 @@ export default function POS() {
     try {
       if (!newCustName || !customerPhone) { showToast('Name and Phone required', 'error'); return; }
       if (!branch) { alert("❌ Error: Branch ID එක ඇවිත් නෑ."); return; }
-
-      const { data: c, error: mainErr } = await supabase.from('customers').insert({
-        branch_id: branch, name: newCustName, phone: customerPhone, address: newCustAddress || 'No Address'
-      }).select().single()
-
+      const { data: c, error: mainErr } = await supabase.from('customers').insert({ branch_id: branch, name: newCustName, phone: customerPhone, address: newCustAddress || 'No Address' }).select().single()
       if (mainErr) { alert(`🔴 DATABASE ERROR:\n${mainErr.message}`); return; }
-
       const syncBranchId = getSyncBranchId()
       if (syncBranchId) {
-        const { data: existing, error: existingError } = await supabase.from('customers')
-          .select('id').eq('branch_id', syncBranchId).eq('phone', customerPhone).maybeSingle()
-
+        const { data: existing, error: existingError } = await supabase.from('customers').select('id').eq('branch_id', syncBranchId).eq('phone', customerPhone).maybeSingle()
         if (existingError) console.error('Customer sync lookup failed:', existingError)
         else if (!existing) {
-          const { error: syncError } = await supabase.from('customers').insert({
-            branch_id: syncBranchId, name: newCustName, phone: customerPhone, address: newCustAddress || 'No Address'
-          })
+          const { error: syncError } = await supabase.from('customers').insert({ branch_id: syncBranchId, name: newCustName, phone: customerPhone, address: newCustAddress || 'No Address' })
           if (syncError) console.error('Customer sync failed:', syncError)
         }
       }
-
       setCustomers(prev => [...prev, c])
       setSelectedCustomer(c)
       setNewCustName(''); setNewCustAddress(''); setNewCustomerForm(false)
@@ -416,7 +285,6 @@ export default function POS() {
     } catch (e) { alert("🔴 SYSTEM ERROR:\n" + e.message) }
   }
 
-  // 📇 Fixed Safe Contact Picker (No Crash Fallback)
   const pickContact = async () => {
     if (Capacitor.isNativePlatform()) {
       try {
@@ -432,12 +300,8 @@ export default function POS() {
               else { setCustomerPhone(phone); setNewCustName(name); setNewCustomerForm(true) }
             }
           }
-        } else {
-          setCustomerModal(true);
-        }
-      } catch (err) {
-        setCustomerModal(true);
-      }
+        } else { setCustomerModal(true); }
+      } catch (err) { setCustomerModal(true); }
     } else {
       if ('contacts' in navigator && 'ContactsManager' in window) {
         try {
@@ -452,9 +316,7 @@ export default function POS() {
             }
           }
         } catch (err) { setCustomerModal(true) }
-      } else {
-        setCustomerModal(true)
-      }
+      } else { setCustomerModal(true) }
     }
   }
 
@@ -464,19 +326,13 @@ export default function POS() {
         const permission = await Contacts.requestPermissions();
         if (permission.contacts === 'granted') {
           const result = await Contacts.pickContact();
-          if (result && result.contact) {
-            setNewCustName(result.contact.name?.display || '');
-            setCustomerPhone(result.contact.phones?.[0]?.number?.replace(/[^0-9+]/g, '') || '');
-          }
+          if (result && result.contact) { setNewCustName(result.contact.name?.display || ''); setCustomerPhone(result.contact.phones?.[0]?.number?.replace(/[^0-9+]/g, '') || ''); }
         }
       } catch (err) {}
     } else {
       try {
         const contacts = await navigator.contacts.select(['name', 'tel'], { multiple: false })
-        if (contacts && contacts.length > 0) {
-          setNewCustName(contacts[0].name ? contacts[0].name[0] : '')
-          setCustomerPhone(contacts[0].tel ? contacts[0].tel[0].replace(/[^0-9+]/g, '') : '')
-        }
+        if (contacts && contacts.length > 0) { setNewCustName(contacts[0].name ? contacts[0].name[0] : ''); setCustomerPhone(contacts[0].tel ? contacts[0].tel[0].replace(/[^0-9+]/g, '') : ''); }
       } catch (err) {}
     }
   }
@@ -503,106 +359,58 @@ export default function POS() {
 
   const checkout = async (status = 'completed') => {
     if (cart.length === 0 || !branch) return
-
     let cid = selectedCustomer?.id
     let customerForCredit = selectedCustomer
-
     if (!navigator.onLine) {
-      const offlineBill = {
-        branch, cart, final, discount, status, 
-        cid: cid || null,
-        customerPhone: customerPhone || selectedCustomer?.phone || '',
-        customerName: selectedCustomer?.name || (customerPhone ? 'Cust ' + customerPhone.slice(-4) : 'Walk-in Customer'),
-        paymentMethod,
-        chequeNumber: paymentMethod === 'cheque' ? chequeNumber : null,
-        chequeDate: paymentMethod === 'cheque' ? chequeDate : null,
-        bank_reference: paymentMethod === 'bank_transfer' ? bankReference : null,
-        syncBranchId: getSyncBranchId(),
-        date: new Date().toLocaleDateString('en-GB') + ' ' + new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}),
-        id: 'OFFLINE-' + Date.now(),
-        customer: selectedCustomer || { name: customerPhone ? 'Cust ' + customerPhone.slice(-4) : 'Walk-in Customer', phone: customerPhone },
-        cashTendered: tenderedNum,
-        balanceDue: balanceDue
-      };
-
+      const offlineBill = { branch, cart, final, discount, status, cid: cid || null, customerPhone: customerPhone || selectedCustomer?.phone || '', customerName: selectedCustomer?.name || (customerPhone ? 'Cust ' + customerPhone.slice(-4) : 'Walk-in Customer'), paymentMethod, chequeNumber: paymentMethod === 'cheque' ? chequeNumber : null, chequeDate: paymentMethod === 'cheque' ? chequeDate : null, bank_reference: paymentMethod === 'bank_transfer' ? bankReference : null, syncBranchId: getSyncBranchId(), date: new Date().toLocaleDateString('en-GB') + ' ' + new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}), id: 'OFFLINE-' + Date.now(), customer: selectedCustomer || { name: customerPhone ? 'Cust ' + customerPhone.slice(-4) : 'Walk-in Customer', phone: customerPhone }, cashTendered: tenderedNum, balanceDue: balanceDue };
       const existingOffline = JSON.parse(localStorage.getItem('offline_bills') || '[]');
       existingOffline.push(offlineBill);
       localStorage.setItem('offline_bills', JSON.stringify(existingOffline));
-
       setLastBill(offlineBill);
-      if (status === 'completed') {
-        setReceiptModalOpen(true);
-        setTimeout(() => { printReceiptWindow(offlineBill); }, 200);
-      }
-
+      if (status === 'completed') { setReceiptModalOpen(true); setTimeout(() => { printReceiptWindow(offlineBill); }, 200); }
       showToast('📴 Offline: Bill saved locally and will sync when internet returns!', 'success');
-      setCart([]); setDiscount(0); 
-      setPaymentMethod('cash'); setChequeNumber(''); setChequeDate(''); setBankReference(''); setCreditDueDate(''); setCashTendered('')
+      setCart([]); setDiscount(0); setPaymentMethod('cash'); setChequeNumber(''); setChequeDate(''); setBankReference(''); setCreditDueDate(''); setCashTendered('')
       return;
     }
 
     for (const item of cart) {
       if (item.preventOutOfStock) {
-        const { data: bp, error: stockError } = await supabase.from('branch_products')
-          .select('stock_quantity').eq('id', item.id).eq('branch_id', branch).maybeSingle()
-        if (stockError || !bp || Number(bp.stock_quantity) < Number(item.qty)) {
-          showToast(`අවවාදයයි: ${item.name} සඳහා ප්‍රමාණවත් තොග නොමැත!`, 'error')
-          return
-        }
+        const { data: bp, error: stockError } = await supabase.from('branch_products').select('stock_quantity').eq('id', item.id).eq('branch_id', branch).maybeSingle()
+        if (stockError || !bp || Number(bp.stock_quantity) < Number(item.qty)) { showToast(`අවවාදයයි: ${item.name} සඳහා ප්‍රමාණවත් තොග නොමැත!`, 'error'); return }
       }
     }
 
     if (!cid && customerPhone) {
-      const { data: nc, error: customerError } = await supabase.from('customers')
-        .insert({ branch_id: branch, phone: customerPhone, name: 'Cust ' + customerPhone.slice(-4) }).select().single()
+      const { data: nc, error: customerError } = await supabase.from('customers').insert({ branch_id: branch, phone: customerPhone, name: 'Cust ' + customerPhone.slice(-4) }).select().single()
       if (customerError) { showToast('Customer creation failed: ' + customerError.message, 'error'); return }
       if (nc) { cid = nc.id; customerForCredit = nc; setCustomers(prev => [...prev, nc]); setSelectedCustomer(nc) }
     } else if (!cid && !customerPhone) {
-      const { data: walkIn, error: walkInLookupError } = await supabase.from('customers')
-        .select('id, name, phone, total_credit').eq('branch_id', branch).ilike('name', 'Walk-in Customer').maybeSingle()
+      const { data: walkIn, error: walkInLookupError } = await supabase.from('customers').select('id, name, phone, total_credit').eq('branch_id', branch).ilike('name', 'Walk-in Customer').maybeSingle()
       if (walkInLookupError) { showToast('Walk-in customer lookup failed: ' + walkInLookupError.message, 'error'); return }
       if (walkIn) { cid = walkIn.id; customerForCredit = walkIn }
       else {
-        const { data: newWalkIn, error: walkInCreateError } = await supabase.from('customers').insert({
-          branch_id: branch, name: 'Walk-in Customer', phone: '0000000000', address: 'Walk-in'
-        }).select().single()
+        const { data: newWalkIn, error: walkInCreateError } = await supabase.from('customers').insert({ branch_id: branch, name: 'Walk-in Customer', phone: '0000000000', address: 'Walk-in' }).select().single()
         if (walkInCreateError) { showToast('Walk-in customer creation failed: ' + walkInCreateError.message, 'error'); return }
         if (newWalkIn) { cid = newWalkIn.id; customerForCredit = newWalkIn }
       }
     }
 
-    const { data: order, error: orderError } = await supabase.from('orders').insert({
-      branch_id: branch, total: final, discount, status, customer_id: cid || null, payment_method: paymentMethod,
-      cheque_number: paymentMethod === 'cheque' ? chequeNumber : null,
-      cheque_date: paymentMethod === 'cheque' ? chequeDate : null,
-      bank_reference: paymentMethod === 'bank_transfer' ? bankReference : null
-    }).select().single()
-
+    const { data: order, error: orderError } = await supabase.from('orders').insert({ branch_id: branch, total: final, discount, status, customer_id: cid || null, payment_method: paymentMethod, cheque_number: paymentMethod === 'cheque' ? chequeNumber : null, cheque_date: paymentMethod === 'cheque' ? chequeDate : null, bank_reference: paymentMethod === 'bank_transfer' ? bankReference : null }).select().single()
     if (orderError) { showToast('Order failed: ' + orderError.message, 'error'); return }
     if (!order) return
 
-    const { error: itemInsertError } = await supabase.from('order_items').insert(cart.map(i => ({
-      order_id: order.id, branch_product_id: i.id, quantity: i.qty, price: i.price
-    })))
-
-    if (itemInsertError) {
-      console.error('Order items insert failed:', itemInsertError)
-      await supabase.from('orders').delete().eq('id', order.id)
-      showToast('Bill failed: items could not be saved. No partial bill was kept.', 'error')
-      return
-    }
+    const { error: itemInsertError } = await supabase.from('order_items').insert(cart.map(i => ({ order_id: order.id, branch_product_id: i.id, quantity: i.qty, price: i.price })))
+    if (itemInsertError) { console.error('Order items insert failed:', itemInsertError); await supabase.from('orders').delete().eq('id', order.id); showToast('Bill failed: items could not be saved. No partial bill was kept.', 'error'); return }
 
     if (status === 'completed') {
       for (const item of cart) {
         if (item.autoUpdateStock === false) continue
         const { error: stockRpcError } = await supabase.rpc('decrement_stock', { bp_id: item.id, qty: item.qty })
         if (stockRpcError) {
-          const { data: current, error: readStockError } = await supabase.from('branch_products')
-            .select('stock_quantity').eq('id', item.id).eq('branch_id', branch).maybeSingle()
+          const { data: current, error: readStockError } = await supabase.from('branch_products').select('stock_quantity').eq('id', item.id).eq('branch_id', branch).maybeSingle()
           if (!readStockError && current) {
             const nextStock = Math.max(0, Number(current.stock_quantity || 0) - Number(item.qty || 0))
-            const { error: stockUpdateError } = await supabase.from('branch_products').update({ stock_quantity: nextStock })
-              .eq('id', item.id).eq('branch_id', branch)
+            const { error: stockUpdateError } = await supabase.from('branch_products').update({ stock_quantity: nextStock }).eq('id', item.id).eq('branch_id', branch)
             if (stockUpdateError) console.error('Stock fallback update failed:', stockUpdateError)
           } else console.error('Stock read failed:', readStockError)
         }
@@ -613,71 +421,34 @@ export default function POS() {
     if (status === 'completed') {
       const syncBranchId = getSyncBranchId()
       if (syncBranchId) {
-        const { error: syncError } = await supabase.rpc('create_parallel_order', {
-          main_order_id: order.id, target_branch_id: syncBranchId
-        })
-        if (syncError) {
-          syncFailed = true
-          console.error('Parallel order sync failed:', syncError)
-          showToast('Main bill saved, but branch sync failed. Do not re-checkout this bill.', 'error')
-        }
+        const { error: syncError } = await supabase.rpc('create_parallel_order', { main_order_id: order.id, target_branch_id: syncBranchId })
+        if (syncError) { syncFailed = true; console.error('Parallel order sync failed:', syncError); showToast('Main bill saved, but branch sync failed. Do not re-checkout this bill.', 'error') }
       }
     }
 
     if (cid && paymentMethod === 'credit' && status === 'completed') {
       const currentCredit = Number(customerForCredit?.total_credit || 0)
       const nextCredit = currentCredit + Number(final || 0)
-      const { error: creditTxError } = await supabase.from('credit_transactions').insert({
-        customer_id: cid, branch_id: branch, amount: final, type: 'purchase',
-        due_date: creditDueDate || new Date(Date.now() + 30*24*60*60*1000).toISOString().split('T')[0], payment_mode: 'credit'
-      })
+      const { error: creditTxError } = await supabase.from('credit_transactions').insert({ customer_id: cid, branch_id: branch, amount: final, type: 'purchase', due_date: creditDueDate || new Date(Date.now() + 30*24*60*60*1000).toISOString().split('T')[0], payment_mode: 'credit' })
       const { error: creditUpdateError } = await supabase.from('customers').update({ total_credit: nextCredit }).eq('id', cid).eq('branch_id', branch)
-      if (creditTxError || creditUpdateError) {
-        console.error('Credit save error:', { creditTxError, creditUpdateError })
-        showToast('Bill saved, but credit details need attention.', 'error')
-      }
+      if (creditTxError || creditUpdateError) { console.error('Credit save error:', { creditTxError, creditUpdateError }); showToast('Bill saved, but credit details need attention.', 'error') }
     }
 
-    const currentBillData = { 
-      items: [...cart], 
-      total: final, 
-      discount: discount,
-      paymentMethod, 
-      cashTendered: tenderedNum,
-      balanceDue: balanceDue,
-      date: new Date().toLocaleDateString('en-GB') + ' ' + new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}),
-      id: order.id,
-      customer: selectedCustomer || { name: 'Walk-in Customer', phone: customerPhone }
-    };
+    const currentBillData = { items: [...cart], total: final, discount: discount, paymentMethod, cashTendered: tenderedNum, balanceDue: balanceDue, date: new Date().toLocaleDateString('en-GB') + ' ' + new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}), id: order.id, customer: selectedCustomer || { name: 'Walk-in Customer', phone: customerPhone } };
     setLastBill(currentBillData);
     
-    if (status === 'completed') {
-      setReceiptModalOpen(true);
-      setTimeout(() => {
-        printReceiptWindow(currentBillData);
-      }, 200);
-    }
-
-    if (status === 'hold') {
-      supabase.from('orders').select('id, total, created_at').eq('branch_id', branch).eq('status', 'hold').order('created_at', { ascending: false }).then(({ data }) => setHoldOrders(data || []))
-    }
+    if (status === 'completed') { setReceiptModalOpen(true); setTimeout(() => { printReceiptWindow(currentBillData); }, 200); }
+    if (status === 'hold') { supabase.from('orders').select('id, total, created_at').eq('branch_id', branch).eq('status', 'hold').order('created_at', { ascending: false }).then(({ data }) => setHoldOrders(data || [])) }
 
     showToast('Bill Cut Successfully!', 'success')
-    setCart([]); setDiscount(0); 
-    setPaymentMethod('cash'); setChequeNumber(''); setChequeDate(''); setBankReference(''); setCreditDueDate(''); setCashTendered('')
+    setCart([]); setDiscount(0); setPaymentMethod('cash'); setChequeNumber(''); setChequeDate(''); setBankReference(''); setCreditDueDate(''); setCashTendered('')
     await fetchProducts();
   }
 
   const loadHold = async (id) => {
-    const { data, error } = await supabase.from('order_items')
-      .select('branch_product_id, quantity, price, branch_products(products(name, prevent_out_of_stock_sale, auto_update_stock))')
-      .eq('order_id', id)
+    const { data, error } = await supabase.from('order_items').select('branch_product_id, quantity, price, branch_products(products(name, prevent_out_of_stock_sale, auto_update_stock))').eq('order_id', id)
     if (error) { showToast('Failed to load held order: ' + error.message, 'error'); return }
-    if (data) setCart(data.map(i => ({
-      id: i.branch_product_id, name: i.branch_products?.products?.name, price: i.price, originalPrice: i.price,
-      qty: i.quantity, preventOutOfStock: i.branch_products?.products?.prevent_out_of_stock_sale ?? false,
-      autoUpdateStock: i.branch_products?.products?.auto_update_stock ?? true
-    })))
+    if (data) setCart(data.map(i => ({ id: i.branch_product_id, name: i.branch_products?.products?.name, price: i.price, originalPrice: i.price, qty: i.quantity, preventOutOfStock: i.branch_products?.products?.prevent_out_of_stock_sale ?? false, autoUpdateStock: i.branch_products?.products?.auto_update_stock ?? true })))
   }
 
   const deleteHoldOrder = async (orderId) => {
@@ -686,43 +457,48 @@ export default function POS() {
     setHoldOrders(prev => prev.filter(o => o.id !== orderId))
   }
 
-  // 📷 Fixed Safe Camera Scanner (No Crash Fallback)
+  // 📷 100% Fixed Scanner (With Modal & Low FPS to avoid freeze)
   const startScanner = async () => {
+    setIsScannerOpen(true);
     if (scanRef.current) { 
       try { await scanRef.current.stop() } catch(e) {}; 
       scanRef.current = null 
     }
 
-    try {
-      if (typeof navigator !== 'undefined' && navigator?.mediaDevices?.getUserMedia) {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
-        stream.getTracks().forEach(track => track.stop());
-      }
+    setTimeout(async () => {
+      try {
+        if (typeof navigator !== 'undefined' && navigator?.mediaDevices?.getUserMedia) {
+          const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+          stream.getTracks().forEach(track => track.stop());
+        }
 
-      const html5QrCode = new Html5Qrcode("reader")
-      scanRef.current = html5QrCode
-      
-      await html5QrCode.start(
-        { facingMode: "environment" }, 
-        { fps: 10, qrbox: { width: 250, height: 250 } },
-        (decodedText) => { 
-          const prod = products.find(p => p.sku === decodedText); 
-          if (prod) addToCart(prod); 
-          else showToast(`Not found: ${decodedText}`, 'error'); 
-          stopScanner() 
-        },
-        () => {}
-      )
-      setScanner(html5QrCode)
-    } catch (err) { 
-      showToast('කැමරාව ආරම්භ කිරීමට නොහැක. (Camera Permission අවශ්‍යයි)', 'error'); 
-      setScanner(null) 
-    }
+        const html5QrCode = new Html5Qrcode("reader-pos")
+        scanRef.current = html5QrCode
+        
+        await html5QrCode.start(
+          { facingMode: "environment" }, 
+          { fps: 5, qrbox: { width: 250, height: 250 } },
+          (decodedText) => { 
+            const prod = products.find(p => p.sku === decodedText); 
+            if (prod) addToCart(prod); 
+            else showToast(`Not found: ${decodedText}`, 'error'); 
+            stopScanner();
+          },
+          () => {}
+        )
+        setScanner(html5QrCode)
+      } catch (err) { 
+        showToast('කැමරාව ආරම්භ කිරීමට නොහැක. (Camera Permission අවශ්‍යයි)', 'error'); 
+        setScanner(null);
+        setIsScannerOpen(false);
+      }
+    }, 300);
   }
 
   const stopScanner = () => {
     if (scanRef.current) { try { scanRef.current.stop() } catch(e) {}; scanRef.current = null }
-    setScanner(null)
+    setScanner(null);
+    setIsScannerOpen(false);
   }
 
   const shareLastBill = async () => {
@@ -742,10 +518,9 @@ export default function POS() {
     } catch (err) { showToast('Share Error', 'error') }
   }
 
-  // 🖨️ UNIVERSAL RECEIPT PRINTING (Matched 100% with Live Receipt Preview Structure)
+  // 🖨️ UNIVERSAL RECEIPT PRINTING
   const printReceiptWindow = (billData = lastBill) => {
     if (!billData) return;
-
     const s = billSettings || {};
     const billSubtotal = billData.items.reduce((sum, i) => sum + ((i.originalPrice || i.price) * i.qty), 0);
     const billDiscount = billData.discount || (billSubtotal - billData.total);
@@ -758,7 +533,6 @@ export default function POS() {
     const billTotal = billData.total;
     const paymentMethod = billData.paymentMethod;
     const cashTenderedVal = paymentMethod === 'cash' ? (billData.cashTendered || billTotal) : billTotal;
-
     const qrText = `INV:${s.bill_number_prefix || 'INV-'}${receiptId}|Total:${billTotal.toFixed(2)}|Date:${receiptDate}`;
     const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(qrText)}`;
 
@@ -768,30 +542,8 @@ export default function POS() {
       <head>
         <style>
           @page { margin: 0; size: ${s.paper_size || '80mm'} auto; } 
-          body { 
-            font-family: 'Courier New', Courier, monospace; 
-            width: ${s.paper_size === '58mm' ? '48mm' : '72mm'}; 
-            margin: 0 auto; 
-            padding-top: ${s.margin_top !== undefined ? s.margin_top : 10}px;
-            padding-bottom: ${s.margin_bottom !== undefined ? s.margin_bottom : 10}px;
-            padding-left: ${s.margin_left !== undefined ? s.margin_left : 10}px;
-            padding-right: ${s.margin_right !== undefined ? s.margin_right : 10}px;
-            color: black; 
-            font-size: 11px;
-            line-height: 1.2;
-          }
-          .text-center { text-align: center; }
-          .font-bold { font-weight: bold; }
-          .flex { display: flex; justify-content: space-between; align-items: flex-end; }
-          .border-b { border-bottom: 1px dashed black; margin: 4px 0; padding-bottom: 2px; }
-          .border-t { border-top: 1px dashed black; margin-top: 4px; padding-top: 4px; }
-          .item-name { font-weight: bold; margin-bottom: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
-          .item-row { display: flex; justify-content: space-between; margin-bottom: 6px; font-size: 10px; }
-          .col-mrp { width: 33%; text-align: left; }
-          .col-rate { width: 25%; text-align: center; }
-          .col-qty { width: 16%; text-align: center; }
-          .col-amt { width: 25%; text-align: right; }
-          .text-xs { font-size: 9px; }
+          body { font-family: 'Courier New', Courier, monospace; width: ${s.paper_size === '58mm' ? '48mm' : '72mm'}; margin: 0 auto; padding-top: ${s.margin_top !== undefined ? s.margin_top : 10}px; padding-bottom: ${s.margin_bottom !== undefined ? s.margin_bottom : 10}px; padding-left: ${s.margin_left !== undefined ? s.margin_left : 10}px; padding-right: ${s.margin_right !== undefined ? s.margin_right : 10}px; color: black; font-size: 11px; line-height: 1.2; }
+          .text-center { text-align: center; } .font-bold { font-weight: bold; } .flex { display: flex; justify-content: space-between; align-items: flex-end; } .border-b { border-bottom: 1px dashed black; margin: 4px 0; padding-bottom: 2px; } .border-t { border-top: 1px dashed black; margin-top: 4px; padding-top: 4px; } .item-name { font-weight: bold; margin-bottom: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; } .item-row { display: flex; justify-content: space-between; margin-bottom: 6px; font-size: 10px; } .col-mrp { width: 33%; text-align: left; } .col-rate { width: 25%; text-align: center; } .col-qty { width: 16%; text-align: center; } .col-amt { width: 25%; text-align: right; } .text-xs { font-size: 9px; }
         </style>
       </head>
       <body>
@@ -800,125 +552,39 @@ export default function POS() {
         ${s.show_header !== false ? `<div class="text-center font-bold" style="font-size: 16px; margin-bottom: 5px;">${s.header_text || 'SHOP NAME'}</div>` : ''}
         ${s.show_contact !== false ? `<div class="text-center text-xs" style="margin-bottom: 8px; white-space: pre-wrap;">${s.contact_info || ''}</div>` : ''}
         ${s.show_tax_no !== false && s.tax_number ? `<div class="text-center text-xs" style="margin-bottom: 4px;">VAT/TAX: ${s.tax_number}</div>` : ''}
-
-        ${(s.show_bill_no !== false || s.show_date_time !== false) ? `
-        <div class="flex text-xs" style="margin-bottom: 4px;">
-          ${s.show_bill_no !== false ? `<div><b>Bill No:</b> ${s.bill_number_prefix || 'INV-'}${receiptId}</div>` : '<div></div>'}
-          ${s.show_date_time !== false ? `<div>${receiptDate}</div>` : ''}
-        </div>` : ''}
-
-        ${s.show_customer_info !== false && custName ? `
-        <div class="text-xs" style="margin-bottom: 4px; word-break: break-word;">
-          <div>Customer: ${custName}</div>
-          ${custPhone ? `<div>Phone: ${custPhone}</div>` : ''}
-        </div>` : ''}
-
+        ${(s.show_bill_no !== false || s.show_date_time !== false) ? `<div class="flex text-xs" style="margin-bottom: 4px;">${s.show_bill_no !== false ? `<div><b>Bill No:</b> ${s.bill_number_prefix || 'INV-'}${receiptId}</div>` : '<div></div>'}${s.show_date_time !== false ? `<div>${receiptDate}</div>` : ''}</div>` : ''}
+        ${s.show_customer_info !== false && custName ? `<div class="text-xs" style="margin-bottom: 4px; word-break: break-word;"><div>Customer: ${custName}</div>${custPhone ? `<div>Phone: ${custPhone}</div>` : ''}</div>` : ''}
         <div class="border-b"></div>
-
-        ${s.show_table_headers !== false ? `
-        <div class="flex font-bold text-xs" style="margin-bottom: 4px;">
-          <div class="col-mrp">උපරිම<br/>සිල්ලර<br/>මිල</div>
-          <div class="col-rate" style="display:flex; align-items:flex-end; justify-content:center;">Rate</div>
-          <div class="col-qty" style="display:flex; align-items:flex-end; justify-content:center;">Qty</div>
-          <div class="col-amt" style="display:flex; align-items:flex-end; justify-content:flex-end;">Amount</div>
-        </div>
+        ${s.show_table_headers !== false ? `<div class="flex font-bold text-xs" style="margin-bottom: 4px;"><div class="col-mrp">උපරිම<br/>සිල්ලර<br/>මිල</div><div class="col-rate" style="display:flex; align-items:flex-end; justify-content:center;">Rate</div><div class="col-qty" style="display:flex; align-items:flex-end; justify-content:center;">Qty</div><div class="col-amt" style="display:flex; align-items:flex-end; justify-content:flex-end;">Amount</div></div><div class="border-b"></div>` : ''}
+        <div style="margin-top: 4px;">${validItems.map(item => `<div><div class="item-name">${item.name}</div><div class="item-row"><div class="col-mrp">${(item.originalPrice || item.price).toFixed(2)}</div><div class="col-rate">${item.price.toFixed(2)}</div><div class="col-qty">${item.qty}</div><div class="col-amt">${(item.price * item.qty).toFixed(2)}</div></div></div>`).join('')}</div>
         <div class="border-b"></div>
-        ` : ''}
-
-        <div style="margin-top: 4px;">
-          ${validItems.map(item => `
-            <div>
-              <div class="item-name">${item.name}</div>
-              <div class="item-row">
-                <div class="col-mrp">${(item.originalPrice || item.price).toFixed(2)}</div>
-                <div class="col-rate">${item.price.toFixed(2)}</div>
-                <div class="col-qty">${item.qty}</div>
-                <div class="col-amt">${(item.price * item.qty).toFixed(2)}</div>
-              </div>
-            </div>
-          `).join('')}
-        </div>
-
-        <div class="border-b"></div>
-
-        ${s.show_total_items !== false ? `
-        <div class="flex text-xs" style="margin-top: 4px;">
-          <span>Total Items:</span>
-          <span>${totalQty}</span>
-        </div>` : ''}
-
-        ${s.show_subtotal !== false ? `
-        <div class="flex text-xs" style="margin-top: 2px;">
-          <span>Subtotal:</span>
-          <span>${billSubtotal.toFixed(2)}</span>
-        </div>
-        ${billDiscount > 0 ? `
-        <div class="flex text-xs">
-          <span>Discount:</span>
-          <span>-${billDiscount.toFixed(2)}</span>
-        </div>` : ''}
-        ` : ''}
-
-        <div class="flex font-bold border-t" style="font-size: 14px; margin-top: 4px;">
-          <span>Total Amount</span>
-          <span>${currency}${billTotal.toFixed(2)}</span>
-        </div>
-
-        <div class="flex text-xs" style="margin-top: 3px;">
-          <span>Amount Received</span>
-          <span>${cashTenderedVal.toFixed(2)}</span>
-        </div>
-
-        ${s.show_payment_details !== false ? `
-        <div class="flex text-xs" style="margin-top: 2px; color: #333;">
-          <span>Payment details</span>
-          <span>${paymentMethod.charAt(0).toUpperCase() + paymentMethod.slice(1)}</span>
-        </div>` : ''}
-
+        ${s.show_total_items !== false ? `<div class="flex text-xs" style="margin-top: 4px;"><span>Total Items:</span><span>${totalQty}</span></div>` : ''}
+        ${s.show_subtotal !== false ? `<div class="flex text-xs" style="margin-top: 2px;"><span>Subtotal:</span><span>${billSubtotal.toFixed(2)}</span></div>${billDiscount > 0 ? `<div class="flex text-xs"><span>Discount:</span><span>-${billDiscount.toFixed(2)}</span></div>` : ''}` : ''}
+        <div class="flex font-bold border-t" style="font-size: 14px; margin-top: 4px;"><span>Total Amount</span><span>${currency}${billTotal.toFixed(2)}</span></div>
+        <div class="flex text-xs" style="margin-top: 3px;"><span>Amount Received</span><span>${cashTenderedVal.toFixed(2)}</span></div>
+        ${s.show_payment_details !== false ? `<div class="flex text-xs" style="margin-top: 2px; color: #333;"><span>Payment details</span><span>${paymentMethod.charAt(0).toUpperCase() + paymentMethod.slice(1)}</span></div>` : ''}
         <div class="border-b" style="margin-top: 4px;"></div>
-        
-        ${s.show_dynamic_qr !== false ? `
-        <div class="text-center" style="margin: 10px 0;">
-          <img src="${qrUrl}" style="height: 60px; width: 60px; filter: grayscale(100%);" />
-          <div style="font-size: 8px; margin-top: 3px; color: #555;">Scan QR for Bill Info</div>
-        </div>` : ''}
-
-        ${s.show_footer !== false ? `
-        <div class="text-center font-bold text-xs" style="margin-top: 8px; white-space: pre-wrap;">${s.footer_text || 'Thank You! Come Again.'}\n${s.footer_text_sinhala || 'ස්තුතියි! නැවත එන්න...'}</div>` : ''}
-        
-        ${s.show_watermark !== false ? `
-        <div class="text-center" style="font-size: 8px; margin-top: 15px; color: #777;">Powered by Nishadi Enterprise Suite.\nDesign & Developed by Ceylon Digi Solutions</div>` : ''}
+        ${s.show_dynamic_qr !== false ? `<div class="text-center" style="margin: 10px 0;"><img src="${qrUrl}" style="height: 60px; width: 60px; filter: grayscale(100%);" /><div style="font-size: 8px; margin-top: 3px; color: #555;">Scan QR for Bill Info</div></div>` : ''}
+        ${s.show_footer !== false ? `<div class="text-center font-bold text-xs" style="margin-top: 8px; white-space: pre-wrap;">${s.footer_text || 'Thank You! Come Again.'}\n${s.footer_text_sinhala || 'ස්තුතියි! නැවත එන්න...'}</div>` : ''}
+        ${s.show_watermark !== false ? `<div class="text-center" style="font-size: 8px; margin-top: 15px; color: #777;">Powered by Nishadi Enterprise Suite.\nDesign & Developed by Ceylon Digi Solutions</div>` : ''}
       </body>
       </html>
     `;
 
     if (Capacitor.isNativePlatform()) {
       showToast('Printing bill directly via Bluetooth...', 'info');
-      printNativeBluetooth(receiptHTML)
-        .then((msg) => showToast(msg, 'success'))
-        .catch((err) => showToast(err, 'error'));
+      printNativeBluetooth(receiptHTML).then((msg) => showToast(msg, 'success')).catch((err) => showToast(err, 'error'));
     } else {
       const iframeId = 'receipt-iframe-' + Date.now();
       const existingIframe = document.getElementById(iframeId);
       if (existingIframe) existingIframe.remove();
-
       const iframe = document.createElement('iframe');
       iframe.id = iframeId;
       iframe.style.display = 'none';
       document.body.appendChild(iframe);
-
       const doc = iframe.contentWindow.document;
-      doc.open();
-      doc.write(receiptHTML);
-      doc.close();
-
-      setTimeout(() => {
-        iframe.contentWindow.focus();
-        iframe.contentWindow.print();
-        setTimeout(() => { 
-          if (document.body.contains(iframe)) document.body.removeChild(iframe); 
-        }, 1500);
-      }, 400);
+      doc.open(); doc.write(receiptHTML); doc.close();
+      setTimeout(() => { iframe.contentWindow.focus(); iframe.contentWindow.print(); setTimeout(() => { if (document.body.contains(iframe)) document.body.removeChild(iframe); }, 1500); }, 400);
     }
   }
 
@@ -927,9 +593,8 @@ export default function POS() {
       <div className="flex gap-2">
         <input className="flex-1 border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white text-base" placeholder="🔍 I want to sell..." value={search} onChange={e=>setSearch(e.target.value)} />
         <button className="px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition" onClick={startScanner}><BsUpcScan size={18}/></button>
-        {scanner && <button className="px-3 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition text-sm" onClick={stopScanner}>Stop</button>}
       </div>
-      <div id="reader" className={`w-full ${scanner ? '' : 'hidden'}`} />
+      
       {products.length === 0 ? (
         <div className="flex-1 flex items-center justify-center text-center opacity-50 dark:text-gray-400">📦 No products found.</div>
       ) : (
@@ -940,7 +605,8 @@ export default function POS() {
             const currentLiveStock = p.stock - inCartQty;
             const isOutOfStock = currentLiveStock <= 0;
             return (
-              <button key={p.id} className={`relative p-3 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-100 dark:bg-gray-700 transition text-left shadow-sm flex flex-col justify-between ${inCartQty > 0 ? 'ring-2 ring-blue-500 bg-blue-50 dark:bg-gray-700' : 'bg-white dark:bg-gray-800 text-gray-900 dark:text-white'} ${isOutOfStock && p.preventOutOfStock ? 'opacity-60 cursor-not-allowed' : ''}`} onClick={() => addToCart(p)}>
+              // 🔴 මෙතන aspect-square දාලා තියෙන්නේ Product Card එක 1:1 වෙන්න 🔴
+              <button key={p.id} className={`relative p-3 aspect-square border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-100 dark:bg-gray-700 transition text-left shadow-sm flex flex-col justify-between ${inCartQty > 0 ? 'ring-2 ring-blue-500 bg-blue-50 dark:bg-gray-700' : 'bg-white dark:bg-gray-800 text-gray-900 dark:text-white'} ${isOutOfStock && p.preventOutOfStock ? 'opacity-60 cursor-not-allowed' : ''}`} onClick={() => addToCart(p)}>
                 {inCartQty > 0 && <span className="absolute top-2 right-2 bg-blue-600 text-white font-extrabold text-xs px-2 py-0.5 rounded-full">x {inCartQty}</span>}
                 <div>
                   <div className="font-semibold text-sm sm:text-base mt-2 line-clamp-2">{p.name}</div>
@@ -1107,18 +773,35 @@ export default function POS() {
         )}
         {isMobile && mobileView === 'billing' && <div className="flex flex-col h-[calc(100vh-120px)]">{billingTerminal}</div>}
 
+        {/* 🟢 SCANNER MODAL (Fixed freezing & close button) */}
+        {isScannerOpen && (
+          <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4 animate-fadeIn">
+            <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl w-full max-w-md p-6 text-center space-y-4">
+              <div className="flex justify-between items-center border-b pb-3 dark:border-gray-700">
+                <h3 className="font-bold text-lg flex items-center gap-2"><FiCamera /> Scan Product Barcode</h3>
+                <button onClick={stopScanner} className="text-gray-400 hover:text-gray-600">
+                  <FiX size={22} />
+                </button>
+              </div>
+              <div id="reader-pos" className="w-full overflow-hidden rounded-xl bg-black min-h-[250px] border-2 border-dashed border-gray-300 dark:border-gray-700"></div>
+              <p className="text-xs text-gray-400">Position barcode inside the frame to add to cart.</p>
+              <button onClick={stopScanner} className="w-full py-3 bg-red-600 hover:bg-red-700 text-white font-bold rounded-xl transition">
+                Close Scanner
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* 🟢 RECEIPT POPUP MODAL */}
         {receiptModalOpen && lastBill && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 animate-fadeIn">
             <div className="bg-white dark:bg-gray-800 text-gray-900 dark:text-white rounded-2xl w-full max-w-md p-6 shadow-2xl border border-gray-200 dark:border-gray-700 space-y-4 animate-scaleIn">
-              
               <div className="text-center border-b border-gray-200 dark:border-gray-700 pb-3">
                 <span className="text-3xl">🧾</span>
                 <h3 className="text-xl font-extrabold mt-1">{billSettings?.header_text || 'Nishadi Motors'}</h3>
                 <p className="text-xs text-gray-500">Order Completed & Auto-Printed!</p>
                 <p className="text-xs text-gray-400 mt-1">{lastBill.date}</p>
               </div>
-
               <div className="bg-gray-50 dark:bg-gray-700/50 p-4 rounded-xl max-h-60 overflow-y-auto space-y-2 border border-gray-100 dark:border-gray-700">
                 {lastBill.items.map((item, idx) => (
                   <div key={idx} className="flex justify-between text-sm">
@@ -1132,42 +815,17 @@ export default function POS() {
                 </div>
                 {lastBill.paymentMethod === 'cash' && (
                   <>
-                    <div className="flex justify-between text-sm text-gray-500">
-                      <span>Cash Tendered:</span>
-                      <span>{currency}{lastBill.cashTendered.toFixed(2)}</span>
-                    </div>
-                    <div className="flex justify-between text-sm font-bold text-blue-600 dark:text-blue-400">
-                      <span>Balance Due:</span>
-                      <span>{currency}{lastBill.balanceDue.toFixed(2)}</span>
-                    </div>
+                    <div className="flex justify-between text-sm text-gray-500"><span>Cash Tendered:</span><span>{currency}{lastBill.cashTendered.toFixed(2)}</span></div>
+                    <div className="flex justify-between text-sm font-bold text-blue-600 dark:text-blue-400"><span>Balance Due:</span><span>{currency}{lastBill.balanceDue.toFixed(2)}</span></div>
                   </>
                 )}
                 <div className="text-xs text-center text-gray-500 pt-1 uppercase">Payment: {lastBill.paymentMethod}</div>
               </div>
-
               <div className="grid grid-cols-2 gap-2 pt-2">
-                <button 
-                  onClick={() => printReceiptWindow(lastBill)} 
-                  className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-xl shadow-md transition flex items-center justify-center gap-2 text-sm"
-                >
-                  🖨️ Print Again
-                </button>
-                
-                <button 
-                  onClick={shareLastBill} 
-                  className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded-xl shadow-md transition flex items-center justify-center gap-2 text-sm"
-                >
-                  <BsWhatsapp size={16} /> WhatsApp
-                </button>
+                <button onClick={() => printReceiptWindow(lastBill)} className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-xl shadow-md transition flex items-center justify-center gap-2 text-sm">🖨️ Print Again</button>
+                <button onClick={shareLastBill} className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded-xl shadow-md transition flex items-center justify-center gap-2 text-sm"><BsWhatsapp size={16} /> WhatsApp</button>
               </div>
-
-              <button 
-                onClick={() => setReceiptModalOpen(false)} 
-                className="w-full bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 font-bold py-3 rounded-xl transition text-sm"
-              >
-                ✅ Done / New Sale
-              </button>
-
+              <button onClick={() => setReceiptModalOpen(false)} className="w-full bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 font-bold py-3 rounded-xl transition text-sm">✅ Done / New Sale</button>
             </div>
           </div>
         )}
@@ -1192,9 +850,7 @@ export default function POS() {
                   <button type="button" onClick={() => setEditQty(editQty + 1)} className="p-3 bg-green-100 dark:bg-green-900/30 text-green-600 rounded-xl font-bold"><FiPlus size={18} /></button>
                 </div>
               </div>
-              <div className="flex gap-2 pt-2">
-                <button type="button" onClick={handleUpdateCartItem} className="flex-1 bg-blue-600 text-white font-bold py-3 rounded-xl hover:bg-blue-700">Update Item</button>
-              </div>
+              <div className="flex gap-2 pt-2"><button type="button" onClick={handleUpdateCartItem} className="flex-1 bg-blue-600 text-white font-bold py-3 rounded-xl hover:bg-blue-700">Update Item</button></div>
             </div>
           </div>
         )}
@@ -1222,9 +878,7 @@ export default function POS() {
             <div className="bg-white dark:bg-gray-800 text-gray-900 dark:text-white rounded-xl shadow-2xl p-6 w-full max-w-md border dark:border-gray-700">
               <h3 className="text-lg font-bold mb-4">New Customer</h3>
               <div className="mb-4">
-                <button type="button" onClick={handlePickContactForModal} className="w-full py-2 bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 font-semibold rounded-lg border border-blue-300 dark:border-blue-800 hover:bg-blue-200 transition flex items-center justify-center gap-2">
-                  📱 Pick from Phone Contacts
-                </button>
+                <button type="button" onClick={handlePickContactForModal} className="w-full py-2 bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 font-semibold rounded-lg border border-blue-300 dark:border-blue-800 hover:bg-blue-200 transition flex items-center justify-center gap-2">📱 Pick from Phone Contacts</button>
               </div>
               <input type="text" className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 mb-2 bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white" placeholder="Name" value={newCustName} onChange={e => setNewCustName(e.target.value)} />
               <input type="tel" className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 mb-4 bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white" placeholder="Phone" value={customerPhone} onChange={e => setCustomerPhone(e.target.value)} />
