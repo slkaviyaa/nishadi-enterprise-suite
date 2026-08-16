@@ -8,6 +8,7 @@ import PageTemplate from './PageTemplate'
 import { 
   FiSearch, FiMaximize, FiUser, FiFileText, FiPhone, FiDollarSign, FiCheckCircle, FiClock, FiX, FiCamera, FiPrinter
 } from 'react-icons/fi'
+import { Html5Qrcode } from 'html5-qrcode' // 👈 අලුතින් Import කළා
 
 // 🚀 Capacitor & Bluetooth Utility Imports
 import { Capacitor } from '@capacitor/core';
@@ -29,7 +30,11 @@ export default function Payments() {
   const [paymentAmount, setPaymentAmount] = useState('')
   const [billTotalInput, setBillTotalInput] = useState('') 
   const [isModalOpen, setIsModalOpen] = useState(false)
+  
+  // 👈 Scanner සඳහා States සහ Refs
   const [isScannerOpen, setIsScannerOpen] = useState(false)
+  const [scanner, setScanner] = useState(null)
+  const scanRef = useRef(null)
 
   const currency = settings?.currency_symbol || 'Rs. '
 
@@ -120,7 +125,50 @@ export default function Payments() {
     setIsModalOpen(true)
   }
 
-  // 🖨️ UNIVERSAL RECEIPT PRINTING FOR PAYMENTS (Native Android Bluetooth / PC Iframe)
+  // 📷 Scanner සදහා අවශ්‍ය Functions
+  const startScanner = async () => {
+    setIsScannerOpen(true)
+    if (scanRef.current) { 
+      try { await scanRef.current.stop() } catch(e) {}; 
+      scanRef.current = null 
+    }
+
+    // Modal එක රෙන්ඩර් වෙනකම් පොඩි ඩේජ් එකක් දීලා කැමරාව ලෝඩ් කිරීම
+    setTimeout(async () => {
+      try {
+        if (typeof navigator !== 'undefined' && navigator?.mediaDevices?.getUserMedia) {
+          const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+          stream.getTracks().forEach(track => track.stop());
+        }
+
+        const html5QrCode = new Html5Qrcode("reader-payments")
+        scanRef.current = html5QrCode
+        
+        await html5QrCode.start(
+          { facingMode: "environment" }, 
+          { fps: 10, qrbox: { width: 250, height: 250 } },
+          (decodedText) => { 
+            setSearchTerm(decodedText);
+            stopScanner();
+            showToast(`Scanned successfully!`, 'success');
+          },
+          () => {}
+        )
+        setScanner(html5QrCode)
+      } catch (err) { 
+        showToast('කැමරාව ආරම්භ කිරීමට නොහැක. (Camera Permission ලබා දෙන්න)', 'error'); 
+        setScanner(null) 
+      }
+    }, 300);
+  }
+
+  const stopScanner = () => {
+    if (scanRef.current) { try { scanRef.current.stop() } catch(e) {}; scanRef.current = null }
+    setScanner(null)
+    setIsScannerOpen(false)
+  }
+
+  // 🖨️ UNIVERSAL RECEIPT PRINTING FOR PAYMENTS
   const printPaymentReceipt = (bill, paidNow, finalTotal) => {
     const s = billSettings || {};
     const receiptNo = 'PR-' + Date.now().toString().slice(-6);
@@ -195,15 +243,12 @@ export default function Payments() {
       </html>
     `;
 
-    // 📱 Universal Print Detection
     if (Capacitor.isNativePlatform()) {
-      // 🚀 ANDROID NATIVE MODE: Direct Bluetooth Print
       showToast('Printing payment receipt via Bluetooth...', 'info');
       printNativeBluetooth(receiptHTML)
         .then((msg) => showToast(msg, 'success'))
         .catch((err) => showToast(err, 'error'));
     } else {
-      // 💻 WEB BROWSER MODE: Invisible Iframe Printing
       const iframeId = 'receipt-iframe-' + Date.now();
       const existingIframe = document.getElementById(iframeId);
       if (existingIframe) existingIframe.remove();
@@ -335,10 +380,7 @@ export default function Payments() {
             </div>
 
             <button 
-              onClick={() => {
-                setIsScannerOpen(true)
-                showToast('QR Scanner camera triggered', 'success')
-              }}
+              onClick={startScanner} // 👈 මෙතන Function එක වෙනස් කළා
               className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold px-6 py-4 rounded-xl shadow-lg transition flex items-center justify-center gap-2 text-lg whitespace-nowrap"
             >
               <FiCamera size={22} /> Scan QR
@@ -420,23 +462,24 @@ export default function Payments() {
           </div>
         )}
 
+        {/* 📷 අලුතින් හැදුව Scanner Modal එක */}
         {isScannerOpen && (
           <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4 animate-fadeIn">
             <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl w-full max-w-md p-6 text-center space-y-4">
               <div className="flex justify-between items-center border-b pb-3 dark:border-gray-700">
                 <h3 className="font-bold text-lg flex items-center gap-2"><FiCamera /> Scan Bill QR Code</h3>
-                <button onClick={() => setIsScannerOpen(false)} className="text-gray-400 hover:text-gray-600">
+                <button onClick={stopScanner} className="text-gray-400 hover:text-gray-600">
                   <FiX size={22} />
                 </button>
               </div>
-              <div className="h-48 bg-gray-100 dark:bg-gray-900 rounded-xl flex flex-col items-center justify-center border-2 border-dashed border-gray-300 dark:border-gray-700">
-                <FiMaximize size={48} className="text-blue-500 animate-bounce mb-2" />
-                <p className="text-sm font-semibold text-gray-500">Position QR code inside the frame</p>
-              </div>
-              <p className="text-xs text-gray-400">Physical USB/Bluetooth barcode and QR scanners will automatically type the code into the search box above.</p>
+              
+              <div id="reader-payments" className="w-full overflow-hidden rounded-xl bg-black min-h-[250px] border-2 border-dashed border-gray-300 dark:border-gray-700"></div>
+
+              <p className="text-xs text-gray-400">Position QR code inside the frame to search instantly. Physical USB/Bluetooth barcode and QR scanners will automatically type the code into the search box above.</p>
+              
               <button 
-                onClick={() => setIsScannerOpen(false)}
-                className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl"
+                onClick={stopScanner}
+                className="w-full py-3 bg-red-600 hover:bg-red-700 text-white font-bold rounded-xl transition"
               >
                 Close Scanner
               </button>
