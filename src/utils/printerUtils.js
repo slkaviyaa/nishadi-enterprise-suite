@@ -1,28 +1,39 @@
 import html2canvas from 'html2canvas';
 
 export const printNativeBluetooth = async (htmlContent) => {
-  return new Promise((resolve, reject) => {
-    // Bluetooth ප්ලගින් එක තියෙනවද කියලා බලනවා
+  return new Promise(async (resolve, reject) => {
+    // 1. ප්ලගින් එක ලෝඩින් වෙන්න පොඩි ප්‍රමාදයක් (Delay) දෙනවා
+    let retries = 0;
+    while (!window.bluetoothSerial && retries < 10) {
+      await new Promise(r => setTimeout(r, 400));
+      retries++;
+    }
+
     if (!window.bluetoothSerial) {
       reject("Bluetooth Plugin not found. This works only in the Native Android App.");
       return;
     }
 
-    // Bluetooth ඔන් කරලාද බලනවා
+    // 2. බ්ලූටූත් ඔන් කරලාද බලනවා
     window.bluetoothSerial.isEnabled(
       () => {
-        // Pair කරපු ඩිවයිස් ලිස්ට් එක ගන්නවා
+        // 3. paired කරපු ඩිවයිස් ලිස්ට් එක ගන්නවා
         window.bluetoothSerial.list(
           (devices) => {
-            if (devices.length === 0) {
+            if (!devices || devices.length === 0) {
               reject("No paired devices found! Please pair your printer in phone Bluetooth settings.");
               return;
             }
             
-            // MP-80L ප්‍රින්ටර් එක හෝ ලිස්ට් එකේ තියෙන පලවෙනි ප්‍රින්ටර් එක තෝරගන්නවා
-            const printer = devices.find(d => d.name.includes('MP-80L') || d.name.toLowerCase().includes('printer')) || devices[0];
+            // MP-80L හෝ ප්‍රින්ටර් එක හොයාගැනීම
+            const printer = devices.find(d => d.name && (d.name.includes('MP-80L') || d.name.toLowerCase().includes('printer'))) || devices[0];
             
-            // ප්‍රින්ටරේට කනෙක්ට් වෙනවා
+            if (!printer || !printer.address) {
+              reject("Printer address not found. Please re-pair your printer.");
+              return;
+            }
+
+            // 4. ප්‍රින්ටරේට කනෙක්ට් වෙනවා (Android 12+ Permission fix එක සමඟ)
             window.bluetoothSerial.connect(printer.address, 
               async () => {
                 try {
@@ -37,7 +48,7 @@ export const printNativeBluetooth = async (htmlContent) => {
                     },
                     (err) => {
                       window.bluetoothSerial.disconnect();
-                      reject("Print failed: " + err);
+                      reject("Print write failed: " + JSON.stringify(err));
                     }
                   );
                 } catch (e) {
@@ -46,15 +57,15 @@ export const printNativeBluetooth = async (htmlContent) => {
                 }
               },
               (err) => {
-                reject("Failed to connect to printer: " + err + ". Is the printer turned on?");
+                reject("Failed to connect to printer: " + JSON.stringify(err) + ". Is the printer turned on?");
               }
             );
           },
-          (err) => reject("Failed to list devices: " + err)
+          (err) => reject("Failed to list devices (Check Bluetooth Permissions): " + JSON.stringify(err))
         );
       },
       () => {
-        reject("Bluetooth is disabled. Please turn it on!");
+        reject("Bluetooth is disabled. Please turn it on in your phone settings!");
       }
     );
   });

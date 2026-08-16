@@ -28,7 +28,7 @@ export default function POS() {
   const [search, setSearch] = useState('')
   const [discount, setDiscount] = useState(0)
   const [customers, setCustomers] = useState([])
-  const [deviceContacts, setDeviceContacts] = useState([]) // 📱 Device Contacts Store
+  const [deviceContacts, setDeviceContacts] = useState([]) 
   const [selectedCustomer, setSelectedCustomer] = useState(null)
   const [holdOrders, setHoldOrders] = useState([])
   const [scanner, setScanner] = useState(null)
@@ -82,34 +82,33 @@ export default function POS() {
     return () => window.removeEventListener('resize', checkMobile)
   }, [])
 
-  // 📱 Fetch Native Device Contacts on Load
+  // 🛡️ NATIVE RUNTIME PERMISSIONS & CONTACTS LOADER ON STARTUP
   useEffect(() => {
-    const fetchDeviceContacts = async () => {
+    const requestAppPermissions = async () => {
       if (Capacitor.isNativePlatform()) {
         try {
-          const perm = await Contacts.checkPermissions();
-          if (perm.contacts !== 'granted') {
-            const request = await Contacts.requestPermissions();
-            if (request.contacts !== 'granted') return;
+          // 1. Request Contacts Permission
+          const contactPerm = await Contacts.requestPermissions();
+          if (contactPerm.contacts === 'granted') {
+            const result = await Contacts.getContacts({ projection: { name: true, phones: true } });
+            if (result && result.contacts) {
+              const formatted = result.contacts
+                .filter(c => c.phones && c.phones.length > 0)
+                .map(c => ({
+                  id: 'dev_' + Math.random(),
+                  name: c.name?.display || 'Unknown Contact',
+                  phone: c.phones[0].number.replace(/[^\d+]/g, ''),
+                  isDeviceContact: true
+                }));
+              setDeviceContacts(formatted);
+            }
           }
-          const result = await Contacts.getContacts({ projection: { name: true, phones: true } });
-          if (result && result.contacts) {
-            const formatted = result.contacts
-              .filter(c => c.phones && c.phones.length > 0)
-              .map(c => ({
-                id: 'dev_' + Math.random(),
-                name: c.name?.display || 'Unknown Contact',
-                phone: c.phones[0].number.replace(/[^\d+]/g, ''),
-                isDeviceContact: true
-              }));
-            setDeviceContacts(formatted);
-          }
-        } catch (error) {
-          console.error('Failed to load device contacts in background', error);
+        } catch (err) {
+          console.error('Permission request error:', err);
         }
       }
     };
-    fetchDeviceContacts();
+    requestAppPermissions();
   }, []);
 
   // 🔄 Offline Sync Handler on Network Status Change
@@ -353,25 +352,22 @@ export default function POS() {
   const tenderedNum = parseFloat(cashTendered) || 0;
   const balanceDue = paymentMethod === 'cash' ? Math.max(0, tenderedNum - final) : 0;
 
-  // 🔍 Database Customers Search
   const filteredCustomers = customers.filter(c => {
     if (!customerSearch.trim()) return false
     const s = customerSearch.toLowerCase()
     return c.name?.toLowerCase().includes(s) || c.phone?.includes(customerSearch)
   })
 
-  // 📱 Native Device Contacts Search (Filters out already saved customers)
   const filteredDeviceContacts = deviceContacts.filter(c => {
     if (!customerSearch.trim()) return false;
     const existsInDB = customers.some(dbCust => dbCust.phone === c.phone);
     if (existsInDB) return false;
     const s = customerSearch.toLowerCase();
     return c.name?.toLowerCase().includes(s) || c.phone?.includes(customerSearch);
-  }).slice(0, 5); // Performance limitation
+  }).slice(0, 5); 
 
   const selectCustomerFromSearch = (cust) => {
     if (cust.isDeviceContact) {
-      // It's from Phone Book, open New Customer form to save to Database
       setCustomerPhone(cust.phone || '');
       setNewCustName(cust.name || '');
       setNewCustomerForm(true);
@@ -379,7 +375,6 @@ export default function POS() {
       setShowCustomerDropdown(false);
       showToast('Please add an address to save this contact to the system.', 'info');
     } else {
-      // Regular Database Customer
       setSelectedCustomer(cust)
       setCustomerPhone(cust.phone || '')
       setCustomerSearch('')
@@ -422,7 +417,6 @@ export default function POS() {
     } catch (e) { alert("🔴 SYSTEM ERROR:\n" + e.message) }
   }
 
-  // 📇 Universal Contact Picker (Button Click)
   const pickContact = async () => {
     if (Capacitor.isNativePlatform()) {
       try {
@@ -464,7 +458,6 @@ export default function POS() {
     }
   }
 
-  // 📇 Pick Contact for Modal
   const handlePickContactForModal = async () => {
     if (Capacitor.isNativePlatform()) {
       try {
@@ -748,7 +741,7 @@ export default function POS() {
     } catch (err) { showToast('Share Error', 'error') }
   }
 
-  // 🖨️ UNIVERSAL RECEIPT PRINTING (Auto-Detects Native Android Bluetooth / PC Iframe)
+  // 🖨️ UNIVERSAL RECEIPT PRINTING (Matched 100% with Live Receipt Preview Structure)
   const printReceiptWindow = (billData = lastBill) => {
     if (!billData) return;
 
@@ -764,7 +757,6 @@ export default function POS() {
     const billTotal = billData.total;
     const paymentMethod = billData.paymentMethod;
     const cashTenderedVal = paymentMethod === 'cash' ? (billData.cashTendered || billTotal) : billTotal;
-    const balanceDueVal = Math.max(0, cashTenderedVal - billTotal);
 
     const qrText = `INV:${s.bill_number_prefix || 'INV-'}${receiptId}|Total:${billTotal.toFixed(2)}|Date:${receiptDate}`;
     const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(qrText)}`;
@@ -867,24 +859,19 @@ export default function POS() {
         ` : ''}
 
         <div class="flex font-bold border-t" style="font-size: 14px; margin-top: 4px;">
-          <span>TOTAL:</span>
+          <span>Total Amount</span>
           <span>${currency}${billTotal.toFixed(2)}</span>
         </div>
 
-        ${paymentMethod === 'cash' ? `
         <div class="flex text-xs" style="margin-top: 3px;">
-          <span>Cash Tendered:</span>
-          <span>${currency}${cashTenderedVal.toFixed(2)}</span>
+          <span>Amount Received</span>
+          <span>${cashTenderedVal.toFixed(2)}</span>
         </div>
-        <div class="flex text-xs font-bold" style="margin-top: 2px;">
-          <span>Balance Due:</span>
-          <span>${currency}${balanceDueVal.toFixed(2)}</span>
-        </div>` : ''}
 
         ${s.show_payment_details !== false ? `
-        <div class="flex text-xs" style="margin-top: 4px; color: #333;">
-          <span>Payment Method:</span>
-          <span>${paymentMethod.toUpperCase()}</span>
+        <div class="flex text-xs" style="margin-top: 2px; color: #333;">
+          <span>Payment details</span>
+          <span>${paymentMethod.charAt(0).toUpperCase() + paymentMethod.slice(1)}</span>
         </div>` : ''}
 
         <div class="border-b" style="margin-top: 4px;"></div>
@@ -899,7 +886,7 @@ export default function POS() {
         <div class="text-center font-bold text-xs" style="margin-top: 8px; white-space: pre-wrap;">${s.footer_text || 'Thank You! Come Again.'}\n${s.footer_text_sinhala || 'ස්තුතියි! නැවත එන්න...'}</div>` : ''}
         
         ${s.show_watermark !== false ? `
-        <div class="text-center" style="font-size: 8px; margin-top: 15px; color: #777;">System by Ceylon Digi Solutions</div>` : ''}
+        <div class="text-center" style="font-size: 8px; margin-top: 15px; color: #777;">Powered by Nishadi Enterprise Suite.\nDesign & Developed by Ceylon Digi Solutions</div>` : ''}
       </body>
       </html>
     `;
@@ -993,13 +980,11 @@ export default function POS() {
             <input type="text" className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white text-base" placeholder="🔍 Search customer or phone contact..." value={customerSearch} onChange={(e) => { setCustomerSearch(e.target.value); setShowCustomerDropdown(true) }} onFocus={() => setShowCustomerDropdown(true)} />
             {customerSearch && (filteredCustomers.length > 0 || filteredDeviceContacts.length > 0) && showCustomerDropdown && (
               <ul className="absolute z-50 mt-1 w-full bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg shadow-lg max-h-48 overflow-y-auto text-gray-900 dark:text-white">
-                {/* 🟢 Database Customers */}
                 {filteredCustomers.map(c => (
                   <li key={c.id} className="px-3 py-2 hover:bg-gray-100 dark:hover:bg-gray-600 cursor-pointer text-sm" onClick={() => selectCustomerFromSearch(c)}>
                     <span className="font-medium">{c.name}</span> <span className="text-xs opacity-70">({c.phone})</span>
                   </li>
                 ))}
-                {/* 📱 Phone Native Contacts */}
                 {filteredDeviceContacts.map(c => (
                   <li key={c.id} className="px-3 py-2 hover:bg-blue-100 dark:hover:bg-blue-900 cursor-pointer text-sm bg-blue-50 dark:bg-blue-900/20 border-t border-blue-100 dark:border-gray-600" onClick={() => selectCustomerFromSearch(c)}>
                     <span className="font-medium flex items-center gap-1">📱 {c.name}</span> 
@@ -1234,7 +1219,7 @@ export default function POS() {
         {newCustomerForm && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
             <div className="bg-white dark:bg-gray-800 text-gray-900 dark:text-white rounded-xl shadow-2xl p-6 w-full max-w-md border dark:border-gray-700">
-              <h3 className="font-bold text-lg mb-4">New Customer</h3>
+              <h3 className="text-lg font-bold mb-4">New Customer</h3>
               <div className="mb-4">
                 <button type="button" onClick={handlePickContactForModal} className="w-full py-2 bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 font-semibold rounded-lg border border-blue-300 dark:border-blue-800 hover:bg-blue-200 transition flex items-center justify-center gap-2">
                   📱 Pick from Phone Contacts
