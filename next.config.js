@@ -1,7 +1,6 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
-  // වෙනත් settings තියෙනවා නම් ඒවත් තියන්න, හැබැයි output: 'export' අනිවාර්යයෙන් මකන්න.
+  // output: 'export' සහ අනිත් දේවල් මකලා දැම්මා
 };
-
 module.exports = nextConfig;

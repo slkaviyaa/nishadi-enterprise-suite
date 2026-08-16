@@ -9,6 +9,10 @@ import {
   FiSearch, FiMaximize, FiUser, FiFileText, FiPhone, FiDollarSign, FiCheckCircle, FiClock, FiX, FiCamera, FiPrinter
 } from 'react-icons/fi'
 
+// 🚀 Capacitor & Bluetooth Utility Imports
+import { Capacitor } from '@capacitor/core';
+import { printNativeBluetooth } from '../utils/printerUtils';
+
 export default function Payments() {
   const { branch } = useAuth()
   const { settings } = useSettings()
@@ -116,7 +120,7 @@ export default function Payments() {
     setIsModalOpen(true)
   }
 
-  // 🖨️ UNIVERSAL RECEIPT PRINTING FOR PAYMENTS
+  // 🖨️ UNIVERSAL RECEIPT PRINTING FOR PAYMENTS (Native Android Bluetooth / PC Iframe)
   const printPaymentReceipt = (bill, paidNow, finalTotal) => {
     const s = billSettings || {};
     const receiptNo = 'PR-' + Date.now().toString().slice(-6);
@@ -191,22 +195,15 @@ export default function Payments() {
       </html>
     `;
 
-    // 📱 Device Detection & Universal Printing
-    const userAgent = navigator.userAgent || navigator.vendor || window.opera;
-    const isAndroid = /android/i.test(userAgent);
-
-    if (isAndroid) {
-      try {
-        const base64Html = btoa(unescape(encodeURIComponent(receiptHTML)));
-        const rawbtIntentUrl = `intent:base64,${base64Html}#Intent;scheme=rawbt;package=ru.a402d.rawbtprinter;end;`;
-        window.location.href = rawbtIntentUrl;
-      } catch (e) {
-        console.error('RawBT Print Error:', e);
-        if (typeof showToast === 'function') {
-           showToast('Printing failed. Please ensure RawBT app is installed.', 'error');
-        }
-      }
+    // 📱 Universal Print Detection
+    if (Capacitor.isNativePlatform()) {
+      // 🚀 ANDROID NATIVE MODE: Direct Bluetooth Print
+      showToast('Printing payment receipt via Bluetooth...', 'info');
+      printNativeBluetooth(receiptHTML)
+        .then((msg) => showToast(msg, 'success'))
+        .catch((err) => showToast(err, 'error'));
     } else {
+      // 💻 WEB BROWSER MODE: Invisible Iframe Printing
       const iframeId = 'receipt-iframe-' + Date.now();
       const existingIframe = document.getElementById(iframeId);
       if (existingIframe) existingIframe.remove();

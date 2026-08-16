@@ -10,6 +10,11 @@ import { FiEdit3, FiTrash2, FiPlus, FiMinus, FiX, FiUserCheck, FiUpload } from '
 import { jsPDF } from 'jspdf'
 import PageTemplate from './PageTemplate';
 
+// 🚀 Capacitor Native Plugins & Bluetooth Utility Imports
+import { Capacitor } from '@capacitor/core';
+import { Contacts } from '@capacitor-community/contacts';
+import { printNativeBluetooth } from '../utils/printerUtils';
+
 const MAIN_BRANCH_ID = '11111111-1111-1111-1111-111111111111';
 const PARALLEL_BRANCH_ID = '22222222-2222-2222-2222-222222222222';
 
@@ -23,6 +28,7 @@ export default function POS() {
   const [search, setSearch] = useState('')
   const [discount, setDiscount] = useState(0)
   const [customers, setCustomers] = useState([])
+  const [deviceContacts, setDeviceContacts] = useState([]) // 📱 Device Contacts Store
   const [selectedCustomer, setSelectedCustomer] = useState(null)
   const [holdOrders, setHoldOrders] = useState([])
   const [scanner, setScanner] = useState(null)
@@ -76,6 +82,36 @@ export default function POS() {
     return () => window.removeEventListener('resize', checkMobile)
   }, [])
 
+  // 📱 Fetch Native Device Contacts on Load
+  useEffect(() => {
+    const fetchDeviceContacts = async () => {
+      if (Capacitor.isNativePlatform()) {
+        try {
+          const perm = await Contacts.checkPermissions();
+          if (perm.contacts !== 'granted') {
+            const request = await Contacts.requestPermissions();
+            if (request.contacts !== 'granted') return;
+          }
+          const result = await Contacts.getContacts({ projection: { name: true, phones: true } });
+          if (result && result.contacts) {
+            const formatted = result.contacts
+              .filter(c => c.phones && c.phones.length > 0)
+              .map(c => ({
+                id: 'dev_' + Math.random(),
+                name: c.name?.display || 'Unknown Contact',
+                phone: c.phones[0].number.replace(/[^\d+]/g, ''),
+                isDeviceContact: true
+              }));
+            setDeviceContacts(formatted);
+          }
+        } catch (error) {
+          console.error('Failed to load device contacts in background', error);
+        }
+      }
+    };
+    fetchDeviceContacts();
+  }, []);
+
   // 🔄 Offline Sync Handler on Network Status Change
   useEffect(() => {
     const handleOnlineSync = async () => {
@@ -89,7 +125,6 @@ export default function POS() {
         try {
           let resolvedCid = billData.cid;
 
-          // 🔍 Resolve or create customer if CID is missing but phone/name exists
           if (!resolvedCid && (billData.customerPhone || billData.customerName)) {
             const phoneToLookup = billData.customerPhone || '0000000000';
             const { data: existingCust } = await supabase.from('customers')
@@ -187,7 +222,6 @@ export default function POS() {
       .is('products.deleted_at', null)
 
     if (error) { 
-      // Fallback to local cached products if offline
       const cached = localStorage.getItem(`cached_products_${branch}`);
       if (cached) {
         setProducts(JSON.parse(cached));
@@ -319,18 +353,39 @@ export default function POS() {
   const tenderedNum = parseFloat(cashTendered) || 0;
   const balanceDue = paymentMethod === 'cash' ? Math.max(0, tenderedNum - final) : 0;
 
+  // 🔍 Database Customers Search
   const filteredCustomers = customers.filter(c => {
     if (!customerSearch.trim()) return false
     const s = customerSearch.toLowerCase()
     return c.name?.toLowerCase().includes(s) || c.phone?.includes(customerSearch)
   })
 
+  // 📱 Native Device Contacts Search (Filters out already saved customers)
+  const filteredDeviceContacts = deviceContacts.filter(c => {
+    if (!customerSearch.trim()) return false;
+    const existsInDB = customers.some(dbCust => dbCust.phone === c.phone);
+    if (existsInDB) return false;
+    const s = customerSearch.toLowerCase();
+    return c.name?.toLowerCase().includes(s) || c.phone?.includes(customerSearch);
+  }).slice(0, 5); // Performance limitation
+
   const selectCustomerFromSearch = (cust) => {
-    setSelectedCustomer(cust)
-    setCustomerPhone(cust.phone || '')
-    setCustomerSearch('')
-    setShowCustomerDropdown(false)
-    setCustomerModal(false)
+    if (cust.isDeviceContact) {
+      // It's from Phone Book, open New Customer form to save to Database
+      setCustomerPhone(cust.phone || '');
+      setNewCustName(cust.name || '');
+      setNewCustomerForm(true);
+      setCustomerSearch('');
+      setShowCustomerDropdown(false);
+      showToast('Please add an address to save this contact to the system.', 'info');
+    } else {
+      // Regular Database Customer
+      setSelectedCustomer(cust)
+      setCustomerPhone(cust.phone || '')
+      setCustomerSearch('')
+      setShowCustomerDropdown(false)
+      setCustomerModal(false)
+    }
   }
 
   const clearCustomer = () => { setSelectedCustomer(null); setCustomerPhone(''); setCustomerSearch('') }
@@ -367,31 +422,70 @@ export default function POS() {
     } catch (e) { alert("🔴 SYSTEM ERROR:\n" + e.message) }
   }
 
+  // 📇 Universal Contact Picker (Button Click)
   const pickContact = async () => {
-    if ('contacts' in navigator && 'ContactsManager' in window) {
+    if (Capacitor.isNativePlatform()) {
+      try {
+        const permission = await Contacts.requestPermissions();
+        if (permission.contacts === 'granted') {
+          const result = await Contacts.pickContact();
+          if (result && result.contact) {
+            const name = result.contact.name?.display || 'Cust';
+            const phone = result.contact.phones?.[0]?.number?.replace(/[^\d+]/g, '') || '';
+            if (phone) {
+              const cust = customers.find(c => c.phone === phone)
+              if (cust) selectCustomerFromSearch(cust)
+              else { setCustomerPhone(phone); setNewCustName(name); setNewCustomerForm(true) }
+            }
+          }
+        } else {
+          showToast('Contacts permission denied!', 'error');
+        }
+      } catch (err) {
+        showToast('Error picking contact', 'error');
+      }
+    } else {
+      if ('contacts' in navigator && 'ContactsManager' in window) {
+        try {
+          const contacts = await navigator.contacts.select(['name', 'tel'], { multiple: false })
+          if (contacts && contacts.length > 0) {
+            const name = contacts[0].name ? contacts[0].name[0] : 'Cust'
+            const phone = contacts[0].tel ? contacts[0].tel[0].replace(/[^\d+]/g, '') : ''
+            if (phone) {
+              const cust = customers.find(c => c.phone === phone)
+              if (cust) selectCustomerFromSearch(cust)
+              else { setCustomerPhone(phone); setNewCustName(name); setNewCustomerForm(true) }
+            }
+          }
+        } catch (err) { setCustomerModal(true) }
+      } else {
+        setCustomerModal(true)
+      }
+    }
+  }
+
+  // 📇 Pick Contact for Modal
+  const handlePickContactForModal = async () => {
+    if (Capacitor.isNativePlatform()) {
+      try {
+        const permission = await Contacts.requestPermissions();
+        if (permission.contacts === 'granted') {
+          const result = await Contacts.pickContact();
+          if (result && result.contact) {
+            setNewCustName(result.contact.name?.display || '');
+            setCustomerPhone(result.contact.phones?.[0]?.number?.replace(/[^0-9+]/g, '') || '');
+          }
+        }
+      } catch (err) {}
+    } else {
       try {
         const contacts = await navigator.contacts.select(['name', 'tel'], { multiple: false })
         if (contacts && contacts.length > 0) {
-          const name = contacts[0].name ? contacts[0].name[0] : 'Cust'
-          const phone = contacts[0].tel ? contacts[0].tel[0].replace(/[^\d+]/g, '') : ''
-          if (phone) {
-            const cust = customers.find(c => c.phone === phone)
-            if (cust) selectCustomerFromSearch(cust)
-            else { setCustomerPhone(phone); setNewCustName(name); setNewCustomerForm(true) }
-          }
+          setNewCustName(contacts[0].name ? contacts[0].name[0] : '')
+          setCustomerPhone(contacts[0].tel ? contacts[0].tel[0].replace(/[^0-9+]/g, '') : '')
         }
-      } catch (err) { setCustomerModal(true) }
-    } else setCustomerModal(true)
-  }
-
-  const handlePickContactForModal = async () => {
-    try {
-      const contacts = await navigator.contacts.select(['name', 'tel'], { multiple: false })
-      if (contacts && contacts.length > 0) {
-        setNewCustName(contacts[0].name ? contacts[0].name[0] : '')
-        setCustomerPhone(contacts[0].tel ? contacts[0].tel[0].replace(/[^0-9+]/g, '') : '')
-      }
-    } catch (err) {}
+      } catch (err) {}
+    }
   }
 
   const handleVcfUpload = (e) => {
@@ -420,7 +514,6 @@ export default function POS() {
     let cid = selectedCustomer?.id
     let customerForCredit = selectedCustomer
 
-    // 🌐 Offline Mode Check with Safe Customer Data Capture
     if (!navigator.onLine) {
       const offlineBill = {
         branch, cart, final, discount, status, 
@@ -600,16 +693,37 @@ export default function POS() {
     setHoldOrders(prev => prev.filter(o => o.id !== orderId))
   }
 
+  // 📷 Native / Web Compatible Camera Scanner with Auto-Prompt
   const startScanner = async () => {
-    if (scanRef.current) { try { await scanRef.current.stop() } catch(e) {}; scanRef.current = null }
-    const html5QrCode = new Html5Qrcode("reader")
-    scanRef.current = html5QrCode
+    if (scanRef.current) { 
+      try { await scanRef.current.stop() } catch(e) {}; 
+      scanRef.current = null 
+    }
+
     try {
-      await html5QrCode.start({ facingMode: "environment" }, { fps: 10, qrbox: { width: 250, height: 250 } },
-        (decodedText) => { const prod = products.find(p => p.sku === decodedText); if (prod) addToCart(prod); else showToast(`Not found: ${decodedText}`, 'error'); stopScanner() },
-        () => {})
+      if (typeof navigator !== 'undefined' && navigator?.mediaDevices?.getUserMedia) {
+        await navigator.mediaDevices.getUserMedia({ video: true });
+      }
+
+      const html5QrCode = new Html5Qrcode("reader")
+      scanRef.current = html5QrCode
+      
+      await html5QrCode.start(
+        { facingMode: "environment" }, 
+        { fps: 10, qrbox: { width: 250, height: 250 } },
+        (decodedText) => { 
+          const prod = products.find(p => p.sku === decodedText); 
+          if (prod) addToCart(prod); 
+          else showToast(`Not found: ${decodedText}`, 'error'); 
+          stopScanner() 
+        },
+        () => {}
+      )
       setScanner(html5QrCode)
-    } catch (err) { showToast('කැමරාව ආරම්භ කිරීමට නොහැක.', 'error'); setScanner(null) }
+    } catch (err) { 
+      showToast('කැමරාව ආරම්භ කිරීමට නොහැක. (Camera Permission ලබා දෙන්න)', 'error'); 
+      setScanner(null) 
+    }
   }
 
   const stopScanner = () => {
@@ -634,7 +748,7 @@ export default function POS() {
     } catch (err) { showToast('Share Error', 'error') }
   }
 
-  // 🖨️ UNIVERSAL RECEIPT PRINTING (Auto-Detects Android RawBT / PC Iframe)
+  // 🖨️ UNIVERSAL RECEIPT PRINTING (Auto-Detects Native Android Bluetooth / PC Iframe)
   const printReceiptWindow = (billData = lastBill) => {
     if (!billData) return;
 
@@ -790,24 +904,12 @@ export default function POS() {
       </html>
     `;
 
-    // 📱 Device Detection & Universal Printing
-    const userAgent = navigator.userAgent || navigator.vendor || window.opera;
-    const isAndroid = /android/i.test(userAgent);
-
-    if (isAndroid) {
-      // 🚀 ANDROID MODE: Print via RawBT
-      try {
-        const base64Html = btoa(unescape(encodeURIComponent(receiptHTML)));
-        const rawbtIntentUrl = `intent:base64,${base64Html}#Intent;scheme=rawbt;package=ru.a402d.rawbtprinter;end;`;
-        window.location.href = rawbtIntentUrl;
-      } catch (e) {
-        console.error('RawBT Print Error:', e);
-        if (typeof showToast === 'function') {
-           showToast('Printing failed. Please ensure RawBT app is installed.', 'error');
-        }
-      }
+    if (Capacitor.isNativePlatform()) {
+      showToast('Printing bill directly via Bluetooth...', 'info');
+      printNativeBluetooth(receiptHTML)
+        .then((msg) => showToast(msg, 'success'))
+        .catch((err) => showToast(err, 'error'));
     } else {
-      // 💻 PC/DESKTOP/iOS MODE: Invisible Iframe Printing
       const iframeId = 'receipt-iframe-' + Date.now();
       const existingIframe = document.getElementById(iframeId);
       if (existingIframe) existingIframe.remove();
@@ -834,10 +936,50 @@ export default function POS() {
 
   const productPanel = (
     <div className="bg-white dark:bg-gray-800 text-gray-900 dark:text-white rounded-xl shadow-2xl p-4 flex flex-col space-y-3 overflow-hidden min-h-0 flex-1">
-      <div className="flex gap-2"><input className="flex-1 border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white text-base" placeholder="🔍 I want to sell..." value={search} onChange={e=>setSearch(e.target.value)} /><button className="px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition" onClick={startScanner}><BsUpcScan size={18}/></button>{scanner&&<button className="px-3 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition text-sm" onClick={stopScanner}>Stop</button>}</div>
+      <div className="flex gap-2">
+        <input className="flex-1 border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white text-base" placeholder="🔍 I want to sell..." value={search} onChange={e=>setSearch(e.target.value)} />
+        <button className="px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition" onClick={startScanner}><BsUpcScan size={18}/></button>
+        {scanner && <button className="px-3 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition text-sm" onClick={stopScanner}>Stop</button>}
+      </div>
       <div id="reader" className={`w-full ${scanner ? '' : 'hidden'}`} />
-      {products.length===0?<div className="flex-1 flex items-center justify-center text-center opacity-50 dark:text-gray-400">📦 No products found.</div>:<div className="grid grid-cols-2 sm:grid-cols-3 gap-2 overflow-y-auto flex-1 min-h-0 pr-1">{products.filter(p=>p.name?.toLowerCase().includes(search.toLowerCase())||p.sku?.toLowerCase().includes(search.toLowerCase())).map(p=>{const cartItem=cart.find(i=>i.id===p.id);const inCartQty=cartItem?cartItem.qty:0;const currentLiveStock=p.stock-inCartQty;const isOutOfStock=currentLiveStock<=0;return <button key={p.id} className={`relative p-3 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-100 dark:bg-gray-700 transition text-left shadow-sm flex flex-col justify-between ${inCartQty>0?'ring-2 ring-blue-500 bg-blue-50 dark:bg-gray-700':'bg-white dark:bg-gray-800 text-gray-900 dark:text-white'} ${isOutOfStock&&p.preventOutOfStock?'opacity-60 cursor-not-allowed':''}`} onClick={()=>addToCart(p)}>{inCartQty>0&&<span className="absolute top-2 right-2 bg-blue-600 text-white font-extrabold text-xs px-2 py-0.5 rounded-full">x {inCartQty}</span>}<div><div className="font-semibold text-sm sm:text-base mt-2 line-clamp-2">{p.name}</div><div className="text-[10px] text-gray-500 dark:text-gray-400 mt-0.5">SKU: {p.sku||'N/A'}</div></div><div className="text-xs sm:text-sm opacity-70 mt-2">{currency}{p.price} | Stock: <span className={isOutOfStock?'text-red-500 font-bold':'font-bold text-blue-400'}>{currentLiveStock}</span></div></button>})}</div>}
-      {holdOrders.length>0&&<div className="bg-gray-100 dark:bg-gray-700 rounded-lg p-3 mt-2 border border-gray-200 dark:border-gray-600"><h4 className="font-medium text-sm mb-2 text-gray-900 dark:text-white">📌 Hold Orders ({holdOrders.length})</h4><div className="space-y-2 max-h-40 overflow-y-auto">{holdOrders.map(o=><div key={o.id} className="flex items-center justify-between bg-white dark:bg-gray-800 p-2 rounded border border-gray-200 dark:border-gray-600 text-sm"><div className="text-gray-900 dark:text-white"><span className="font-semibold">#{o.id.slice(0,6)}</span><span className="ml-2">{currency}{o.total}</span></div><div className="flex gap-1"><button className="px-2 py-1 bg-blue-500 text-white rounded text-xs" onClick={()=>loadHold(o.id)}>Load</button><button className="px-2 py-1 bg-red-500 text-white rounded text-xs" onClick={()=>deleteHoldOrder(o.id)}>Del</button></div></div>)}</div></div>}
+      {products.length === 0 ? (
+        <div className="flex-1 flex items-center justify-center text-center opacity-50 dark:text-gray-400">📦 No products found.</div>
+      ) : (
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 overflow-y-auto flex-1 min-h-0 pr-1">
+          {products.filter(p => p.name?.toLowerCase().includes(search.toLowerCase()) || p.sku?.toLowerCase().includes(search.toLowerCase())).map(p => {
+            const cartItem = cart.find(i => i.id === p.id);
+            const inCartQty = cartItem ? cartItem.qty : 0;
+            const currentLiveStock = p.stock - inCartQty;
+            const isOutOfStock = currentLiveStock <= 0;
+            return (
+              <button key={p.id} className={`relative p-3 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-100 dark:bg-gray-700 transition text-left shadow-sm flex flex-col justify-between ${inCartQty > 0 ? 'ring-2 ring-blue-500 bg-blue-50 dark:bg-gray-700' : 'bg-white dark:bg-gray-800 text-gray-900 dark:text-white'} ${isOutOfStock && p.preventOutOfStock ? 'opacity-60 cursor-not-allowed' : ''}`} onClick={() => addToCart(p)}>
+                {inCartQty > 0 && <span className="absolute top-2 right-2 bg-blue-600 text-white font-extrabold text-xs px-2 py-0.5 rounded-full">x {inCartQty}</span>}
+                <div>
+                  <div className="font-semibold text-sm sm:text-base mt-2 line-clamp-2">{p.name}</div>
+                  <div className="text-[10px] text-gray-500 dark:text-gray-400 mt-0.5">SKU: {p.sku || 'N/A'}</div>
+                </div>
+                <div className="text-xs sm:text-sm opacity-70 mt-2">{currency}{p.price} | Stock: <span className={isOutOfStock ? 'text-red-500 font-bold' : 'font-bold text-blue-400'}>{currentLiveStock}</span></div>
+              </button>
+            )
+          })}
+        </div>
+      )}
+      {holdOrders.length > 0 && (
+        <div className="bg-gray-100 dark:bg-gray-700 rounded-lg p-3 mt-2 border border-gray-200 dark:border-gray-600">
+          <h4 className="font-medium text-sm mb-2 text-gray-900 dark:text-white">📌 Hold Orders ({holdOrders.length})</h4>
+          <div className="space-y-2 max-h-40 overflow-y-auto">
+            {holdOrders.map(o => (
+              <div key={o.id} className="flex items-center justify-between bg-white dark:bg-gray-800 p-2 rounded border border-gray-200 dark:border-gray-600 text-sm">
+                <div className="text-gray-900 dark:text-white"><span className="font-semibold">#{o.id.slice(0, 6)}</span><span className="ml-2">{currency}{o.total}</span></div>
+                <div className="flex gap-1">
+                  <button className="px-2 py-1 bg-blue-500 text-white rounded text-xs" onClick={() => loadHold(o.id)}>Load</button>
+                  <button className="px-2 py-1 bg-red-500 text-white rounded text-xs" onClick={() => deleteHoldOrder(o.id)}>Del</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   )
 
@@ -848,10 +990,22 @@ export default function POS() {
       <div className="relative mb-3" ref={customerDropdownRef}>
         <div className="flex items-center gap-2">
           <div className="relative flex-1">
-            <input type="text" className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white text-base" placeholder="🔍 Search customer..." value={customerSearch} onChange={(e) => { setCustomerSearch(e.target.value); setShowCustomerDropdown(true) }} onFocus={() => setShowCustomerDropdown(true)} />
-            {customerSearch && filteredCustomers.length > 0 && showCustomerDropdown && (
+            <input type="text" className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white text-base" placeholder="🔍 Search customer or phone contact..." value={customerSearch} onChange={(e) => { setCustomerSearch(e.target.value); setShowCustomerDropdown(true) }} onFocus={() => setShowCustomerDropdown(true)} />
+            {customerSearch && (filteredCustomers.length > 0 || filteredDeviceContacts.length > 0) && showCustomerDropdown && (
               <ul className="absolute z-50 mt-1 w-full bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg shadow-lg max-h-48 overflow-y-auto text-gray-900 dark:text-white">
-                {filteredCustomers.map(c => <li key={c.id} className="px-3 py-2 hover:bg-gray-100 dark:hover:bg-gray-600 cursor-pointer text-sm" onClick={() => selectCustomerFromSearch(c)}><span className="font-medium">{c.name}</span> <span className="text-xs opacity-70">({c.phone})</span></li>)}
+                {/* 🟢 Database Customers */}
+                {filteredCustomers.map(c => (
+                  <li key={c.id} className="px-3 py-2 hover:bg-gray-100 dark:hover:bg-gray-600 cursor-pointer text-sm" onClick={() => selectCustomerFromSearch(c)}>
+                    <span className="font-medium">{c.name}</span> <span className="text-xs opacity-70">({c.phone})</span>
+                  </li>
+                ))}
+                {/* 📱 Phone Native Contacts */}
+                {filteredDeviceContacts.map(c => (
+                  <li key={c.id} className="px-3 py-2 hover:bg-blue-100 dark:hover:bg-blue-900 cursor-pointer text-sm bg-blue-50 dark:bg-blue-900/20 border-t border-blue-100 dark:border-gray-600" onClick={() => selectCustomerFromSearch(c)}>
+                    <span className="font-medium flex items-center gap-1">📱 {c.name}</span> 
+                    <span className="text-xs opacity-70">({c.phone}) - Save to System</span>
+                  </li>
+                ))}
               </ul>
             )}
           </div>
@@ -949,151 +1103,153 @@ export default function POS() {
   )
 
   return (
-    <div className="text-gray-900 dark:text-white h-full">
-      {!isMobile && (
-        <div className="flex gap-4 h-[calc(100vh-120px)]">
-          <div className="w-2/5 flex flex-col">{productPanel}</div>
-          <div className="w-3/5 flex flex-col">{billingTerminal}</div>
-        </div>
-      )}
-      {isMobile && mobileView === 'products' && (
-        <div className="flex flex-col h-[calc(100vh-120px)]">
-          <div className="flex-1 overflow-hidden flex flex-col">{productPanel}</div>
-          <div className="p-3 flex-shrink-0">
-            <button className="w-full py-4 bg-blue-600 text-white rounded-xl font-bold text-lg" onClick={() => setMobileView('billing')}>🛒 Go to Counter ({totalItemCount})</button>
+    <PageTemplate>
+      <div className="text-gray-900 dark:text-white h-full">
+        {!isMobile && (
+          <div className="flex gap-4 h-[calc(100vh-120px)]">
+            <div className="w-2/5 flex flex-col">{productPanel}</div>
+            <div className="w-3/5 flex flex-col">{billingTerminal}</div>
           </div>
-        </div>
-      )}
-      {isMobile && mobileView === 'billing' && <div className="flex flex-col h-[calc(100vh-120px)]">{billingTerminal}</div>}
-
-      {/* 🟢 RECEIPT POPUP MODAL */}
-      {receiptModalOpen && lastBill && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 animate-fadeIn">
-          <div className="bg-white dark:bg-gray-800 text-gray-900 dark:text-white rounded-2xl w-full max-w-md p-6 shadow-2xl border border-gray-200 dark:border-gray-700 space-y-4 animate-scaleIn">
-            
-            <div className="text-center border-b border-gray-200 dark:border-gray-700 pb-3">
-              <span className="text-3xl">🧾</span>
-              <h3 className="text-xl font-extrabold mt-1">{billSettings?.header_text || 'Nishadi Motors'}</h3>
-              <p className="text-xs text-gray-500">Order Completed & Auto-Printed!</p>
-              <p className="text-xs text-gray-400 mt-1">{lastBill.date}</p>
+        )}
+        {isMobile && mobileView === 'products' && (
+          <div className="flex flex-col h-[calc(100vh-120px)]">
+            <div className="flex-1 overflow-hidden flex flex-col">{productPanel}</div>
+            <div className="p-3 flex-shrink-0">
+              <button className="w-full py-4 bg-blue-600 text-white rounded-xl font-bold text-lg" onClick={() => setMobileView('billing')}>🛒 Go to Counter ({totalItemCount})</button>
             </div>
+          </div>
+        )}
+        {isMobile && mobileView === 'billing' && <div className="flex flex-col h-[calc(100vh-120px)]">{billingTerminal}</div>}
 
-            <div className="bg-gray-50 dark:bg-gray-700/50 p-4 rounded-xl max-h-60 overflow-y-auto space-y-2 border border-gray-100 dark:border-gray-700">
-              {lastBill.items.map((item, idx) => (
-                <div key={idx} className="flex justify-between text-sm">
-                  <span className="font-medium truncate max-w-[200px]">{item.name} <span className="text-xs text-gray-400">x{item.qty}</span></span>
-                  <span className="font-bold">{currency}{(item.price * item.qty).toFixed(2)}</span>
-                </div>
-              ))}
-              <div className="border-t border-gray-200 dark:border-gray-600 pt-2 mt-2 flex justify-between font-extrabold text-base">
-                <span>Total Amount:</span>
-                <span className="text-green-600 dark:text-green-400">{currency}{lastBill.total.toFixed(2)}</span>
-              </div>
-              {lastBill.paymentMethod === 'cash' && (
-                <>
-                  <div className="flex justify-between text-sm text-gray-500">
-                    <span>Cash Tendered:</span>
-                    <span>{currency}{lastBill.cashTendered.toFixed(2)}</span>
-                  </div>
-                  <div className="flex justify-between text-sm font-bold text-blue-600 dark:text-blue-400">
-                    <span>Balance Due:</span>
-                    <span>{currency}{lastBill.balanceDue.toFixed(2)}</span>
-                  </div>
-                </>
-              )}
-              <div className="text-xs text-center text-gray-500 pt-1 uppercase">Payment: {lastBill.paymentMethod}</div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-2 pt-2">
-              <button 
-                onClick={() => printReceiptWindow(lastBill)} 
-                className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-xl shadow-md transition flex items-center justify-center gap-2 text-sm"
-              >
-                🖨️ Print Again
-              </button>
+        {/* 🟢 RECEIPT POPUP MODAL */}
+        {receiptModalOpen && lastBill && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 animate-fadeIn">
+            <div className="bg-white dark:bg-gray-800 text-gray-900 dark:text-white rounded-2xl w-full max-w-md p-6 shadow-2xl border border-gray-200 dark:border-gray-700 space-y-4 animate-scaleIn">
               
+              <div className="text-center border-b border-gray-200 dark:border-gray-700 pb-3">
+                <span className="text-3xl">🧾</span>
+                <h3 className="text-xl font-extrabold mt-1">{billSettings?.header_text || 'Nishadi Motors'}</h3>
+                <p className="text-xs text-gray-500">Order Completed & Auto-Printed!</p>
+                <p className="text-xs text-gray-400 mt-1">{lastBill.date}</p>
+              </div>
+
+              <div className="bg-gray-50 dark:bg-gray-700/50 p-4 rounded-xl max-h-60 overflow-y-auto space-y-2 border border-gray-100 dark:border-gray-700">
+                {lastBill.items.map((item, idx) => (
+                  <div key={idx} className="flex justify-between text-sm">
+                    <span className="font-medium truncate max-w-[200px]">{item.name} <span className="text-xs text-gray-400">x{item.qty}</span></span>
+                    <span className="font-bold">{currency}{(item.price * item.qty).toFixed(2)}</span>
+                  </div>
+                ))}
+                <div className="border-t border-gray-200 dark:border-gray-600 pt-2 mt-2 flex justify-between font-extrabold text-base">
+                  <span>Total Amount:</span>
+                  <span className="text-green-600 dark:text-green-400">{currency}{lastBill.total.toFixed(2)}</span>
+                </div>
+                {lastBill.paymentMethod === 'cash' && (
+                  <>
+                    <div className="flex justify-between text-sm text-gray-500">
+                      <span>Cash Tendered:</span>
+                      <span>{currency}{lastBill.cashTendered.toFixed(2)}</span>
+                    </div>
+                    <div className="flex justify-between text-sm font-bold text-blue-600 dark:text-blue-400">
+                      <span>Balance Due:</span>
+                      <span>{currency}{lastBill.balanceDue.toFixed(2)}</span>
+                    </div>
+                  </>
+                )}
+                <div className="text-xs text-center text-gray-500 pt-1 uppercase">Payment: {lastBill.paymentMethod}</div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2 pt-2">
+                <button 
+                  onClick={() => printReceiptWindow(lastBill)} 
+                  className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-xl shadow-md transition flex items-center justify-center gap-2 text-sm"
+                >
+                  🖨️ Print Again
+                </button>
+                
+                <button 
+                  onClick={shareLastBill} 
+                  className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded-xl shadow-md transition flex items-center justify-center gap-2 text-sm"
+                >
+                  <BsWhatsapp size={16} /> WhatsApp
+                </button>
+              </div>
+
               <button 
-                onClick={shareLastBill} 
-                className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded-xl shadow-md transition flex items-center justify-center gap-2 text-sm"
+                onClick={() => setReceiptModalOpen(false)} 
+                className="w-full bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 font-bold py-3 rounded-xl transition text-sm"
               >
-                <BsWhatsapp size={16} /> WhatsApp
+                ✅ Done / New Sale
               </button>
+
             </div>
-
-            <button 
-              onClick={() => setReceiptModalOpen(false)} 
-              className="w-full bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 font-bold py-3 rounded-xl transition text-sm"
-            >
-              ✅ Done / New Sale
-            </button>
-
           </div>
-        </div>
-      )}
+        )}
 
-      {/* Edit Item Modal */}
-      {editModalOpen && selectedCartItem && (
-        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
-          <div className="bg-white dark:bg-gray-800 text-gray-900 dark:text-white rounded-2xl w-full max-w-md p-6 space-y-4 shadow-2xl border dark:border-gray-700">
-            <div className="flex justify-between items-start border-b border-gray-200 dark:border-gray-700 pb-3">
-              <h3 className="text-lg font-bold">{selectedCartItem.name}</h3>
-              <button onClick={() => setEditModalOpen(false)} className="hover:text-red-500"><FiX size={20} /></button>
-            </div>
-            <div>
-              <label className="block text-xs font-semibold mb-1">Selling Price ({currency})</label>
-              <input type="number" value={editPrice} onChange={(e) => setEditPrice(e.target.value)} className="w-full border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white rounded-xl px-4 py-2.5 font-bold" />
-            </div>
-            <div>
-              <label className="block text-xs font-semibold mb-1">Quantity</label>
-              <div className="flex items-center gap-3">
-                <button type="button" onClick={() => setEditQty(Math.max(1, editQty - 1))} className="p-3 bg-red-100 dark:bg-red-900/30 text-red-600 rounded-xl font-bold"><FiMinus size={18} /></button>
-                <input type="number" min="1" value={editQty} onChange={(e) => setEditQty(Math.max(1, Number(e.target.value)))} className="flex-1 border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white rounded-xl py-2.5 text-center font-bold text-lg" />
-                <button type="button" onClick={() => setEditQty(editQty + 1)} className="p-3 bg-green-100 dark:bg-green-900/30 text-green-600 rounded-xl font-bold"><FiPlus size={18} /></button>
+        {/* Edit Item Modal */}
+        {editModalOpen && selectedCartItem && (
+          <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
+            <div className="bg-white dark:bg-gray-800 text-gray-900 dark:text-white rounded-2xl w-full max-w-md p-6 space-y-4 shadow-2xl border dark:border-gray-700">
+              <div className="flex justify-between items-start border-b border-gray-200 dark:border-gray-700 pb-3">
+                <h3 className="text-lg font-bold">{selectedCartItem.name}</h3>
+                <button onClick={() => setEditModalOpen(false)} className="hover:text-red-500"><FiX size={20} /></button>
+              </div>
+              <div>
+                <label className="block text-xs font-semibold mb-1">Selling Price ({currency})</label>
+                <input type="number" value={editPrice} onChange={(e) => setEditPrice(e.target.value)} className="w-full border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white rounded-xl px-4 py-2.5 font-bold" />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold mb-1">Quantity</label>
+                <div className="flex items-center gap-3">
+                  <button type="button" onClick={() => setEditQty(Math.max(1, editQty - 1))} className="p-3 bg-red-100 dark:bg-red-900/30 text-red-600 rounded-xl font-bold"><FiMinus size={18} /></button>
+                  <input type="number" min="1" value={editQty} onChange={(e) => setEditQty(Math.max(1, Number(e.target.value)))} className="flex-1 border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white rounded-xl py-2.5 text-center font-bold text-lg" />
+                  <button type="button" onClick={() => setEditQty(editQty + 1)} className="p-3 bg-green-100 dark:bg-green-900/30 text-green-600 rounded-xl font-bold"><FiPlus size={18} /></button>
+                </div>
+              </div>
+              <div className="flex gap-2 pt-2">
+                <button type="button" onClick={handleUpdateCartItem} className="flex-1 bg-blue-600 text-white font-bold py-3 rounded-xl hover:bg-blue-700">Update Item</button>
               </div>
             </div>
-            <div className="flex gap-2 pt-2">
-              <button type="button" onClick={handleUpdateCartItem} className="flex-1 bg-blue-600 text-white font-bold py-3 rounded-xl hover:bg-blue-700">Update Item</button>
-            </div>
           </div>
-        </div>
-      )}
+        )}
 
-      {/* Import Contact Modal */}
-      {customerModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-          <div className="bg-white dark:bg-gray-800 text-gray-900 dark:text-white rounded-2xl w-full max-w-md p-6 shadow-2xl space-y-4 border dark:border-gray-700">
-            <div className="flex justify-between items-center border-b border-gray-200 dark:border-gray-700 pb-3">
-              <h3 className="text-lg font-bold">📇 Import Contact</h3>
-              <button onClick={() => setCustomerModal(false)} className="hover:text-red-500"><FiX size={20} /></button>
+        {/* Import Contact Modal */}
+        {customerModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+            <div className="bg-white dark:bg-gray-800 text-gray-900 dark:text-white rounded-2xl w-full max-w-md p-6 shadow-2xl space-y-4 border dark:border-gray-700">
+              <div className="flex justify-between items-center border-b border-gray-200 dark:border-gray-700 pb-3">
+                <h3 className="text-lg font-bold">📇 Import Contact</h3>
+                <button onClick={() => setCustomerModal(false)} className="hover:text-red-500"><FiX size={20} /></button>
+              </div>
+              <p className="text-sm opacity-80 text-center">කරුණාකර VCF ෆයිල් එකක් හරහා අප්ලෝඩ් කරන්න.</p>
+              <label className="bg-blue-600 text-white text-sm font-bold px-4 py-3 rounded-lg cursor-pointer flex items-center justify-center gap-2 hover:bg-blue-700">
+                <FiUpload /> VCF / VCard එකක් තෝරන්න
+                <input type="file" accept=".vcf,.vcard" onChange={handleVcfUpload} className="hidden" />
+              </label>
             </div>
-            <p className="text-sm opacity-80 text-center">කරුණාකර VCF ෆයිල් එකක් හරහා අප්ලෝඩ් කරන්න.</p>
-            <label className="bg-blue-600 text-white text-sm font-bold px-4 py-3 rounded-lg cursor-pointer flex items-center justify-center gap-2 hover:bg-blue-700">
-              <FiUpload /> VCF / VCard එකක් තෝරන්න
-              <input type="file" accept=".vcf,.vcard" onChange={handleVcfUpload} className="hidden" />
-            </label>
           </div>
-        </div>
-      )}
+        )}
 
-      {/* New Customer Modal */}
-      {newCustomerForm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-          <div className="bg-white dark:bg-gray-800 text-gray-900 dark:text-white rounded-xl shadow-2xl p-6 w-full max-w-md border dark:border-gray-700">
-            <h3 className="font-bold text-lg mb-4">New Customer</h3>
-            <div className="mb-4">
-              <button type="button" onClick={handlePickContactForModal} className="w-full py-2 bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 font-semibold rounded-lg border border-blue-300 dark:border-blue-800 hover:bg-blue-200 transition flex items-center justify-center gap-2">
-                📱 Pick from Phone Contacts
-              </button>
-            </div>
-            <input type="text" className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 mb-2 bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white" placeholder="Name" value={newCustName} onChange={e => setNewCustName(e.target.value)} />
-            <input type="tel" className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 mb-4 bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white" placeholder="Phone" value={customerPhone} onChange={e => setCustomerPhone(e.target.value)} />
-            <div className="flex gap-2">
-              <button className="flex-1 px-4 py-3 bg-green-600 hover:bg-green-700 text-white rounded-lg font-medium" onClick={createNewCustomer}>Create</button>
-              <button className="flex-1 px-4 py-3 bg-red-500 hover:bg-red-600 text-white rounded-lg font-medium" onClick={() => setNewCustomerForm(false)}>Cancel</button>
+        {/* New Customer Modal */}
+        {newCustomerForm && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+            <div className="bg-white dark:bg-gray-800 text-gray-900 dark:text-white rounded-xl shadow-2xl p-6 w-full max-w-md border dark:border-gray-700">
+              <h3 className="font-bold text-lg mb-4">New Customer</h3>
+              <div className="mb-4">
+                <button type="button" onClick={handlePickContactForModal} className="w-full py-2 bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 font-semibold rounded-lg border border-blue-300 dark:border-blue-800 hover:bg-blue-200 transition flex items-center justify-center gap-2">
+                  📱 Pick from Phone Contacts
+                </button>
+              </div>
+              <input type="text" className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 mb-2 bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white" placeholder="Name" value={newCustName} onChange={e => setNewCustName(e.target.value)} />
+              <input type="tel" className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 mb-4 bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white" placeholder="Phone" value={customerPhone} onChange={e => setCustomerPhone(e.target.value)} />
+              <div className="flex gap-2">
+                <button className="flex-1 px-4 py-3 bg-green-600 hover:bg-green-700 text-white rounded-lg font-medium" onClick={createNewCustomer}>Create</button>
+                <button className="flex-1 px-4 py-3 bg-red-500 hover:bg-red-600 text-white rounded-lg font-medium" onClick={() => setNewCustomerForm(false)}>Cancel</button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
-    </div>
+        )}
+      </div>
+    </PageTemplate>
   )
 }

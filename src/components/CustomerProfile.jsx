@@ -6,6 +6,10 @@ import { useToast } from '../context/ToastContext'
 import { useRouter } from 'next/navigation'
 import PageTemplate from './PageTemplate'
 
+// 🚀 Capacitor & Bluetooth Utility Imports
+import { Capacitor } from '@capacitor/core';
+import { printNativeBluetooth } from '../utils/printerUtils';
+
 export default function CustomerProfile({ customerId }) {
   const { branch } = useAuth()
   const { showToast } = useToast()
@@ -111,10 +115,8 @@ export default function CustomerProfile({ customerId }) {
     }
   }
 
-  // 🖨️ UNIVERSAL RECEIPT PRINTING FOR CUSTOMER BILL HISTORY
+  // 🖨️ UNIVERSAL RECEIPT PRINTING FOR CUSTOMER BILL HISTORY (Native Bluetooth / PC Iframe)
   const printOrder = (order) => {
-    showToast('Preparing receipt...', 'info')
-    
     const s = billSettings || {};
     const currency = 'Rs. ';
     const validItems = order.order_items || [];
@@ -288,20 +290,11 @@ export default function CustomerProfile({ customerId }) {
     `;
     
     // 📱 Device Detection & Universal Printing
-    const userAgent = navigator.userAgent || navigator.vendor || window.opera;
-    const isAndroid = /android/i.test(userAgent);
-
-    if (isAndroid) {
-      try {
-        const base64Html = btoa(unescape(encodeURIComponent(receiptHTML)));
-        const rawbtIntentUrl = `intent:base64,${base64Html}#Intent;scheme=rawbt;package=ru.a402d.rawbtprinter;end;`;
-        window.location.href = rawbtIntentUrl;
-      } catch (e) {
-        console.error('RawBT Print Error:', e);
-        if (typeof showToast === 'function') {
-           showToast('Printing failed. Please ensure RawBT app is installed.', 'error');
-        }
-      }
+    if (Capacitor.isNativePlatform()) {
+      showToast('Printing bill via Bluetooth...', 'info');
+      printNativeBluetooth(receiptHTML)
+        .then((msg) => showToast(msg, 'success'))
+        .catch((err) => showToast(err, 'error'));
     } else {
       const iframeId = 'receipt-iframe-' + Date.now();
       const existingIframe = document.getElementById(iframeId);
@@ -373,171 +366,173 @@ export default function CustomerProfile({ customerId }) {
     setReturnOrder(null)
   }
 
-  if (!customer) return <div className="p-4">Loading customer...</div>
+  if (!customer) return <PageTemplate><div className="p-4">Loading customer...</div></PageTemplate>
 
   return (
-    <div className="space-y-6 text-gray-900 dark:text-white">
-      <div className="flex items-center gap-4">
-        <button onClick={() => router.push('/customers')} className="px-4 py-2 bg-gray-200 dark:bg-gray-700 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 transition">← Back</button>
-        <div>
-          <h2 className="text-2xl font-bold">{customer.name}</h2>
-          <p className="text-sm opacity-70">📞 {customer.phone} {customer.address && `• 📍 ${customer.address}`}</p>
-          {lastVisit && <p className="text-xs opacity-50">Last visit: {new Date(lastVisit).toLocaleDateString()}</p>}
-        </div>
-      </div>
-
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
-        <div className="bg-blue-600 text-white rounded-xl p-4 shadow">
-          <div className="text-sm text-blue-100">Total Credit</div>
-          <div className="text-xl font-bold">Rs. {customer.total_credit?.toLocaleString() || 0}</div>
-        </div>
-        <div className="bg-green-600 text-white rounded-xl p-4 shadow">
-          <div className="text-sm text-green-100">Total Revenue</div>
-          <div className="text-xl font-bold">Rs. {totalRevenue.toLocaleString()}</div>
-        </div>
-        <div className="bg-purple-600 text-white rounded-xl p-4 shadow">
-          <div className="text-sm text-purple-100">Avg. Bill</div>
-          <div className="text-xl font-bold">Rs. {avgBill}</div>
-        </div>
-        <div className="bg-orange-500 text-white rounded-xl p-4 shadow">
-          <div className="text-sm text-orange-100">Orders</div>
-          <div className="text-xl font-bold">{orders.length}</div>
-        </div>
-        <div className="bg-teal-600 text-white rounded-xl p-4 shadow">
-          <div className="text-sm text-teal-100">Payment Modes</div>
-          <div className="text-xs space-y-1 mt-1">
-            {Object.entries(paymentSplit).map(([method, amount]) => (
-              <div key={method} className="flex justify-between capitalize">
-                <span>{method}</span><span>Rs. {amount.toLocaleString()}</span>
-              </div>
-            ))}
-            {Object.keys(paymentSplit).length === 0 && <span>No data</span>}
+    <PageTemplate>
+      <div className="space-y-6 text-gray-900 dark:text-white">
+        <div className="flex items-center gap-4">
+          <button onClick={() => router.push('/customers')} className="px-4 py-2 bg-gray-200 dark:bg-gray-700 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 transition">← Back</button>
+          <div>
+            <h2 className="text-2xl font-bold">{customer.name}</h2>
+            <p className="text-sm opacity-70">📞 {customer.phone} {customer.address && `• 📍 ${customer.address}`}</p>
+            {lastVisit && <p className="text-xs opacity-50">Last visit: {new Date(lastVisit).toLocaleDateString()}</p>}
           </div>
         </div>
-      </div>
 
-      <div className="flex gap-2 flex-wrap">
-        {['all', 'credit', 'cash', 'return'].map(mode => (
-          <button key={mode} onClick={() => setModeFilter(mode)}
-            className={`px-4 py-2 rounded-lg text-sm font-medium transition capitalize ${
-              modeFilter === mode ? 'bg-blue-600 text-white' : 'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600'
-            }`}>{mode}</button>
-        ))}
-      </div>
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
+          <div className="bg-blue-600 text-white rounded-xl p-4 shadow">
+            <div className="text-sm text-blue-100">Total Credit</div>
+            <div className="text-xl font-bold">Rs. {customer.total_credit?.toLocaleString() || 0}</div>
+          </div>
+          <div className="bg-green-600 text-white rounded-xl p-4 shadow">
+            <div className="text-sm text-green-100">Total Revenue</div>
+            <div className="text-xl font-bold">Rs. {totalRevenue.toLocaleString()}</div>
+          </div>
+          <div className="bg-purple-600 text-white rounded-xl p-4 shadow">
+            <div className="text-sm text-purple-100">Avg. Bill</div>
+            <div className="text-xl font-bold">Rs. {avgBill}</div>
+          </div>
+          <div className="bg-orange-500 text-white rounded-xl p-4 shadow">
+            <div className="text-sm text-orange-100">Orders</div>
+            <div className="text-xl font-bold">{orders.length}</div>
+          </div>
+          <div className="bg-teal-600 text-white rounded-xl p-4 shadow">
+            <div className="text-sm text-teal-100">Payment Modes</div>
+            <div className="text-xs space-y-1 mt-1">
+              {Object.entries(paymentSplit).map(([method, amount]) => (
+                <div key={method} className="flex justify-between capitalize">
+                  <span>{method}</span><span>Rs. {amount.toLocaleString()}</span>
+                </div>
+              ))}
+              {Object.keys(paymentSplit).length === 0 && <span>No data</span>}
+            </div>
+          </div>
+        </div>
 
-      <div className="overflow-x-auto bg-white dark:bg-gray-800 rounded-xl shadow border border-gray-200 dark:border-gray-700">
-        <table className="w-full">
-          <thead>
-            <tr className="border-b border-gray-200 dark:border-gray-700 text-left text-xs text-gray-500 uppercase">
-              <th className="p-3">Date</th>
-              <th className="p-3">Type</th>
-              <th className="p-3">Amount</th>
-              <th className="p-3">Mode</th>
-              <th className="p-3">Note</th>
-            </tr>
-          </thead>
-          <tbody>
-            {loading ? <tr><td colSpan={5} className="p-4 text-center">Loading...</td></tr> : transactions.length === 0 ? <tr><td colSpan={5} className="p-4 text-center opacity-50">No transactions found</td></tr> : transactions.map(t => (
-              <tr key={t.id} className="border-b border-gray-100 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition">
-                <td className="p-3 text-sm">{new Date(t.created_at).toLocaleDateString()}</td>
-                <td className="p-3 text-sm"><span className={`px-2 py-1 rounded-full text-xs font-medium ${t.type === 'purchase' ? 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300' : 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300'}`}>{t.type}</span></td>
-                <td className="p-3 text-sm font-semibold">Rs. {t.amount?.toLocaleString()}</td>
-                <td className="p-3 text-sm capitalize">{t.payment_mode}</td>
-                <td className="p-3 text-sm opacity-70">{t.note || '-'}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+        <div className="flex gap-2 flex-wrap">
+          {['all', 'credit', 'cash', 'return'].map(mode => (
+            <button key={mode} onClick={() => setModeFilter(mode)}
+              className={`px-4 py-2 rounded-lg text-sm font-medium transition capitalize ${
+                modeFilter === mode ? 'bg-blue-600 text-white' : 'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600'
+              }`}>{mode}</button>
+          ))}
+        </div>
 
-      <h3 className="text-xl font-bold mt-6">Orders</h3>
-      {orders.length === 0 ? (
-        <div className="text-center py-4 opacity-50">No orders yet</div>
-      ) : (
         <div className="overflow-x-auto bg-white dark:bg-gray-800 rounded-xl shadow border border-gray-200 dark:border-gray-700">
           <table className="w-full">
             <thead>
               <tr className="border-b border-gray-200 dark:border-gray-700 text-left text-xs text-gray-500 uppercase">
-                <th className="p-3">Order #</th>
                 <th className="p-3">Date</th>
-                <th className="p-3">Items</th>
-                <th className="p-3 text-right">Total</th>
-                <th className="p-3">Status</th>
-                <th className="p-3 text-center">Actions</th>
+                <th className="p-3">Type</th>
+                <th className="p-3">Amount</th>
+                <th className="p-3">Mode</th>
+                <th className="p-3">Note</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
-              {orders.map(order => (
-                <tr key={order.id} className="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
-                  <td className="p-3 text-sm font-mono">#{order.id.slice(0,6)}</td>
-                  <td className="p-3 text-sm">{new Date(order.created_at).toLocaleDateString()}</td>
-                  <td className="p-3 text-sm">
-                    <button
-                      onClick={() => setViewItems(order.order_items)}
-                      className="text-blue-600 dark:text-blue-400 underline text-xs hover:no-underline"
-                    >
-                      {order.order_items.length} item(s)
-                    </button>
-                  </td>
-                  <td className="p-3 text-sm text-right font-semibold">Rs. {order.total.toFixed(2)}</td>
-                  <td className="p-3 text-sm">
-                    <span className={`px-2 py-1 rounded-full text-xs font-medium capitalize ${
-                      order.status === 'completed' ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300' :
-                      order.status === 'partially_returned' ? 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-300' :
-                      order.status === 'returned' ? 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300' :
-                      'bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-300'
-                    }`}>{order.status.replace('_', ' ')}</span>
-                  </td>
-                  <td className="p-3 text-center">
-                    <div className="flex justify-center gap-2">
-                      <button onClick={() => printOrder(order)} className="px-2 py-1 text-xs bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded hover:bg-gray-200 dark:hover:bg-gray-600 transition">🖨️</button>
-                      {order.status !== 'returned' && (
-                        <button onClick={() => initiateReturn(order)} className="px-2 py-1 text-xs bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-300 rounded hover:bg-orange-200 transition">↩️</button>
-                      )}
-                    </div>
-                  </td>
+            <tbody>
+              {loading ? <tr><td colSpan={5} className="p-4 text-center">Loading...</td></tr> : transactions.length === 0 ? <tr><td colSpan={5} className="p-4 text-center opacity-50">No transactions found</td></tr> : transactions.map(t => (
+                <tr key={t.id} className="border-b border-gray-100 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition">
+                  <td className="p-3 text-sm">{new Date(t.created_at).toLocaleDateString()}</td>
+                  <td className="p-3 text-sm"><span className={`px-2 py-1 rounded-full text-xs font-medium ${t.type === 'purchase' ? 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300' : 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300'}`}>{t.type}</span></td>
+                  <td className="p-3 text-sm font-semibold">Rs. {t.amount?.toLocaleString()}</td>
+                  <td className="p-3 text-sm capitalize">{t.payment_mode}</td>
+                  <td className="p-3 text-sm opacity-70">{t.note || '-'}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
-      )}
 
-      {viewItems && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setViewItems(null)}>
-          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl p-6 w-11/12 max-w-md" onClick={e => e.stopPropagation()}>
-            <h3 className="font-bold text-lg mb-4">Order Items</h3>
-            <ul className="divide-y divide-gray-200 dark:divide-gray-700 max-h-60 overflow-y-auto custom-scrollbar pr-2">
-              {viewItems.map((item, idx) => (
-                <li key={idx} className="flex justify-between py-2 text-sm">
-                  <span className="truncate pr-2">{item.name} x{item.quantity}</span>
-                  <span className="font-semibold whitespace-nowrap">Rs. {(item.price * item.quantity).toFixed(2)}</span>
-                </li>
-              ))}
-            </ul>
-            <button onClick={() => setViewItems(null)} className="mt-4 w-full py-2 bg-gray-200 dark:bg-gray-700 rounded-lg font-bold transition hover:bg-gray-300 dark:hover:bg-gray-600">Close</button>
+        <h3 className="text-xl font-bold mt-6">Orders</h3>
+        {orders.length === 0 ? (
+          <div className="text-center py-4 opacity-50">No orders yet</div>
+        ) : (
+          <div className="overflow-x-auto bg-white dark:bg-gray-800 rounded-xl shadow border border-gray-200 dark:border-gray-700">
+            <table className="w-full">
+              <thead>
+                <tr className="border-b border-gray-200 dark:border-gray-700 text-left text-xs text-gray-500 uppercase">
+                  <th className="p-3">Order #</th>
+                  <th className="p-3">Date</th>
+                  <th className="p-3">Items</th>
+                  <th className="p-3 text-right">Total</th>
+                  <th className="p-3">Status</th>
+                  <th className="p-3 text-center">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+                {orders.map(order => (
+                  <tr key={order.id} className="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
+                    <td className="p-3 text-sm font-mono">#{order.id.slice(0,6)}</td>
+                    <td className="p-3 text-sm">{new Date(order.created_at).toLocaleDateString()}</td>
+                    <td className="p-3 text-sm">
+                      <button
+                        onClick={() => setViewItems(order.order_items)}
+                        className="text-blue-600 dark:text-blue-400 underline text-xs hover:no-underline"
+                      >
+                        {order.order_items.length} item(s)
+                      </button>
+                    </td>
+                    <td className="p-3 text-sm text-right font-semibold">Rs. {order.total.toFixed(2)}</td>
+                    <td className="p-3 text-sm">
+                      <span className={`px-2 py-1 rounded-full text-xs font-medium capitalize ${
+                        order.status === 'completed' ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300' :
+                        order.status === 'partially_returned' ? 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-300' :
+                        order.status === 'returned' ? 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300' :
+                        'bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-300'
+                      }`}>{order.status.replace('_', ' ')}</span>
+                    </td>
+                    <td className="p-3 text-center">
+                      <div className="flex justify-center gap-2">
+                        <button onClick={() => printOrder(order)} className="px-2 py-1 text-xs bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded hover:bg-gray-200 dark:hover:bg-gray-600 transition">🖨️</button>
+                        {order.status !== 'returned' && (
+                          <button onClick={() => initiateReturn(order)} className="px-2 py-1 text-xs bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-300 rounded hover:bg-orange-200 transition">↩️</button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
-        </div>
-      )}
+        )}
 
-      {returnOrder && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl p-6 w-full max-w-lg">
-            <h3 className="font-bold text-lg mb-4">Return Items (Order #{returnOrder.orderId.slice(0,6)})</h3>
-            <textarea className="w-full border dark:border-gray-600 bg-gray-50 dark:bg-gray-700 rounded p-2 mb-3 text-sm" placeholder="Reason for return (optional)" value={returnOrder.reason} onChange={e => setReturnOrder({ ...returnOrder, reason: e.target.value })} />
-            {returnOrder.items.map((item, idx) => (
-              <div key={item.id} className="flex items-center gap-3 mb-2">
-                <span className="flex-1 text-sm truncate">{item.name} (Sold: {item.quantity}, Returned: {item.returned_quantity})</span>
-                <input type="number" min={0} max={item.quantity - item.returned_quantity} value={item.returnQty} onChange={e => { const newItems = [...returnOrder.items]; newItems[idx].returnQty = Math.min(item.quantity - item.returned_quantity, Math.max(0, Number(e.target.value))); setReturnOrder({ ...returnOrder, items: newItems }) }} className="w-20 border dark:border-gray-600 bg-gray-50 dark:bg-gray-700 rounded px-2 py-1 text-sm text-center" />
-              </div>
-            ))}
-            <div className="flex gap-2 justify-end mt-4">
-              <button onClick={processReturn} className="px-4 py-2 bg-blue-600 text-white rounded-lg font-bold hover:bg-blue-700 transition">Confirm Return</button>
-              <button onClick={() => setReturnOrder(null)} className="px-4 py-2 bg-gray-300 dark:bg-gray-700 rounded-lg hover:bg-gray-400 dark:hover:bg-gray-600 transition">Cancel</button>
+        {viewItems && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setViewItems(null)}>
+            <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl p-6 w-11/12 max-w-md" onClick={e => e.stopPropagation()}>
+              <h3 className="font-bold text-lg mb-4">Order Items</h3>
+              <ul className="divide-y divide-gray-200 dark:divide-gray-700 max-h-60 overflow-y-auto custom-scrollbar pr-2">
+                {viewItems.map((item, idx) => (
+                  <li key={idx} className="flex justify-between py-2 text-sm">
+                    <span className="truncate pr-2">{item.name} x{item.quantity}</span>
+                    <span className="font-semibold whitespace-nowrap">Rs. {(item.price * item.quantity).toFixed(2)}</span>
+                  </li>
+                ))}
+              </ul>
+              <button onClick={() => setViewItems(null)} className="mt-4 w-full py-2 bg-gray-200 dark:bg-gray-700 rounded-lg font-bold transition hover:bg-gray-300 dark:hover:bg-gray-600">Close</button>
             </div>
           </div>
-        </div>
-      )}
-    </div>
+        )}
+
+        {returnOrder && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+            <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl p-6 w-full max-w-lg">
+              <h3 className="font-bold text-lg mb-4">Return Items (Order #{returnOrder.orderId.slice(0,6)})</h3>
+              <textarea className="w-full border dark:border-gray-600 bg-gray-50 dark:bg-gray-700 rounded p-2 mb-3 text-sm" placeholder="Reason for return (optional)" value={returnOrder.reason} onChange={e => setReturnOrder({ ...returnOrder, reason: e.target.value })} />
+              {returnOrder.items.map((item, idx) => (
+                <div key={item.id} className="flex items-center gap-3 mb-2">
+                  <span className="flex-1 text-sm truncate">{item.name} (Sold: {item.quantity}, Returned: {item.returned_quantity})</span>
+                  <input type="number" min={0} max={item.quantity - item.returned_quantity} value={item.returnQty} onChange={e => { const newItems = [...returnOrder.items]; newItems[idx].returnQty = Math.min(item.quantity - item.returned_quantity, Math.max(0, Number(e.target.value))); setReturnOrder({ ...returnOrder, items: newItems }) }} className="w-20 border dark:border-gray-600 bg-gray-50 dark:bg-gray-700 rounded px-2 py-1 text-sm text-center" />
+                </div>
+              ))}
+              <div className="flex gap-2 justify-end mt-4">
+                <button onClick={processReturn} className="px-4 py-2 bg-blue-600 text-white rounded-lg font-bold hover:bg-blue-700 transition">Confirm Return</button>
+                <button onClick={() => setReturnOrder(null)} className="px-4 py-2 bg-gray-300 dark:bg-gray-700 rounded-lg hover:bg-gray-400 dark:hover:bg-gray-600 transition">Cancel</button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </PageTemplate>
   )
 }
