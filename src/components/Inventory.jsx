@@ -7,7 +7,7 @@ import { useToast } from '../context/ToastContext'
 import PageTemplate from './PageTemplate'
 import { 
   FiEdit, FiTrash2, FiDownload, FiPlus, FiUpload, 
-  FiBox, FiCheckSquare, FiSquare, FiLock, FiRepeat, FiAlertCircle, FiX, FiRefreshCw 
+  FiBox, FiCheckSquare, FiSquare, FiLock, FiRepeat, FiAlertCircle, FiX, FiRefreshCw, FiCheck, FiArrowRight 
 } from 'react-icons/fi'
 
 export default function Inventory() {
@@ -18,6 +18,9 @@ export default function Inventory() {
   const [products, setProducts] = useState([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
+
+  // 🟢 Bulk Selection State
+  const [selectedProducts, setSelectedProducts] = useState([])
 
   // Date Filters for Stock Movement
   const todayStr = new Date().toISOString().split('T')[0]
@@ -44,10 +47,28 @@ export default function Inventory() {
   const [currentProductId, setCurrentProductId] = useState(null)
   
   const [formData, setFormData] = useState({
-    sku: '', name: '', cost_price: '', selling_price: '', stock_quantity: '',
+    sku: '', barcode: '', name: '', category: '', cost_price: '', selling_price: '', stock_quantity: '',
     track_profit: false, low_stock_alerts: false, auto_update_stock: true,
     prevent_out_of_stock_sale: true, has_barcode: false, track_expiry: false, add_tax: false
   })
+
+  // ================= 🟢 CSV IMPORT FLOW STATES =================
+  const [importStep, setImportStep] = useState(0) 
+  const [csvHeaders, setCsvHeaders] = useState([])
+  const [csvData, setCsvData] = useState([])
+  const [fieldMapping, setFieldMapping] = useState({
+    name: '', category: '', sku: '', cost_price: '', selling_price: '', stock_quantity: ''
+  })
+  const [previewData, setPreviewData] = useState([])
+
+  const dbFields = [
+    { key: 'name', label: 'Item Name', required: true },
+    { key: 'category', label: 'Category', required: false },
+    { key: 'selling_price', label: 'Selling Price', required: true },
+    { key: 'cost_price', label: 'Cost Price', required: false },
+    { key: 'stock_quantity', label: 'Stock', required: false },
+    { key: 'sku', label: 'Part Number / Barcode', required: false }
+  ]
 
   useEffect(() => {
     if (branch) {
@@ -57,20 +78,20 @@ export default function Inventory() {
 
   const loadInitialInventory = async () => {
     setLoading(true)
+    setSelectedProducts([])
     try {
       const { data: bpData, error: bpErr } = await supabase
         .from('branch_products')
         .select(`
           id, product_id, price, cost_price, stock_quantity, 
           track_profit, low_stock_alerts, auto_update_stock, prevent_out_of_stock_sale, has_barcode, track_expiry, add_tax,
-          products!inner(sku, name, deleted_at)
+          products!inner(sku, barcode, name, category, deleted_at)
         `)
         .eq('branch_id', branch)
         .is('products.deleted_at', null)
 
       if (bpErr) throw bpErr
 
-      // Fetch ALL Sales (Removed strict status check to ensure no sales are missed)
       const { data: allSales, error: salesErr } = await supabase
         .from('order_items')
         .select('branch_product_id, quantity, orders!inner(branch_id)')
@@ -85,17 +106,18 @@ export default function Inventory() {
         }
       })
 
-      // Fix applied: Added = Stock Balance + Lifetime Sold
       const formattedProducts = (bpData || []).map(p => {
         const sold = lifetimeSoldMap[p.id] || 0
         const stock = Number(p.stock_quantity) || 0
-        const added = stock + sold // Guaranteed to show correct Total Added
+        const added = stock + sold 
 
         return {
           id: p.id,
           product_id: p.product_id,
           sku: p.products?.sku || 'N/A',
+          barcode: p.products?.barcode || '',
           name: p.products?.name || 'Unnamed',
+          category: p.products?.category || 'Uncategorized',
           price: Number(p.price) || 0,
           cost: Number(p.cost_price) || 0,
           stock: stock,
@@ -122,7 +144,6 @@ export default function Inventory() {
         .slice(0, 4)
       setFastMovingList(sortedBySales)
 
-      // Auto load report based on default dates
       generateMovementReport(formattedProducts, dateFrom, dateTo)
 
     } catch (err) {
@@ -133,7 +154,6 @@ export default function Inventory() {
     }
   }
 
-  // Uses parameters to handle "Clear" functionality safely without waiting for React State
   const generateMovementReport = async (currentProducts = products, fromDate, toDate) => {
     setReportLoading(true)
     try {
@@ -142,12 +162,8 @@ export default function Inventory() {
         .select('branch_product_id, quantity, created_at, orders!inner(branch_id)')
         .eq('orders.branch_id', branch)
 
-      if (fromDate && fromDate !== '') {
-        salesQuery = salesQuery.gte('created_at', `${fromDate}T00:00:00.000Z`)
-      }
-      if (toDate && toDate !== '') {
-        salesQuery = salesQuery.lte('created_at', `${toDate}T23:59:59.999Z`)
-      }
+      if (fromDate && fromDate !== '') salesQuery = salesQuery.gte('created_at', `${fromDate}T00:00:00.000Z`)
+      if (toDate && toDate !== '') salesQuery = salesQuery.lte('created_at', `${toDate}T23:59:59.999Z`)
 
       const { data: orderItemsData, error: salesErr } = await salesQuery
       if (salesErr) console.error("Report Sales Query Error:", salesErr)
@@ -166,19 +182,9 @@ export default function Inventory() {
         const sold = salesMap[p.id] || 0
         const balance = p.stock
         const added = balance + sold 
-        
         periodAdded += added
 
-        return {
-          id: p.id,
-          sku: p.sku,
-          name: p.name,
-          price: p.price,
-          cost: p.cost,
-          added: added,
-          sold: sold,
-          balance: balance
-        }
+        return { id: p.id, sku: p.sku, name: p.name, price: p.price, cost: p.cost, added: added, sold: sold, balance: balance }
       }).filter(m => m.added > 0 || m.sold > 0 || m.balance > 0)
 
       setTotalSold(periodSold)
@@ -193,11 +199,10 @@ export default function Inventory() {
     }
   }
 
-  // FIXED CLEAR BUTTON: Instantly clears dates AND removes items from table
   const handleClearDates = () => {
     setDateFrom('')
     setDateTo('')
-    setMovements([]) // This line empties the report table completely
+    setMovements([]) 
     setTotalSold(0)
     setTotalAdded(0)
     showToast('Report dates cleared', 'success')
@@ -207,7 +212,7 @@ export default function Inventory() {
   const handleOpenAddModal = () => {
     setIsEditing(false)
     setFormData({
-      sku: '', name: '', cost_price: '', selling_price: '', stock_quantity: '',
+      sku: '', barcode: '', name: '', category: '', cost_price: '', selling_price: '', stock_quantity: '',
       track_profit: false, low_stock_alerts: false, auto_update_stock: true,
       prevent_out_of_stock_sale: true, has_barcode: false, track_expiry: false, add_tax: false
     })
@@ -219,7 +224,7 @@ export default function Inventory() {
     setCurrentBpId(p.id)
     setCurrentProductId(p.product_id)
     setFormData({
-      sku: p.sku, name: p.name, 
+      sku: p.sku, barcode: p.barcode || '', name: p.name, category: p.category, 
       cost_price: p.cost, selling_price: p.price, stock_quantity: p.stock,
       track_profit: p.track_profit || false,
       low_stock_alerts: p.low_stock_alerts || false,
@@ -244,7 +249,13 @@ export default function Inventory() {
 
     try {
       if (isEditing) {
-        await supabase.from('products').update({ sku: formData.sku, name: formData.name }).eq('id', currentProductId)
+        await supabase.from('products').update({ 
+          sku: formData.sku, 
+          barcode: formData.barcode,
+          name: formData.name, 
+          category: formData.category || 'Uncategorized' 
+        }).eq('id', currentProductId)
+
         await supabase.from('branch_products').update({
           price: Number(formData.selling_price),
           cost_price: Number(formData.cost_price),
@@ -260,8 +271,10 @@ export default function Inventory() {
         showToast('Product updated successfully!', 'success')
       } else {
         const { data: newProd, error: prodErr } = await supabase.from('products').insert({ 
-          sku: formData.sku || `SKU-${Date.now().toString().slice(-6)}`, 
-          name: formData.name 
+          sku: formData.sku || `ITM-${Date.now().toString().slice(-6)}`, 
+          barcode: formData.barcode,
+          name: formData.name,
+          category: formData.category || 'Uncategorized'
         }).select().single()
 
         if(prodErr) throw prodErr
@@ -300,107 +313,274 @@ export default function Inventory() {
     }
   }
 
-  const handleCSVImport = async (e) => {
+  const handleBulkDelete = async () => {
+    if(!confirm(`Are you sure you want to delete ${selectedProducts.length} items?`)) return;
+    setLoading(true);
+    try {
+      await supabase.from('products').update({ deleted_at: new Date().toISOString() }).in('id', selectedProducts);
+      showToast(`${selectedProducts.length} items deleted successfully`, 'success');
+      loadInitialInventory();
+    } catch (err) {
+      showToast(err.message, 'error');
+      setLoading(false);
+    }
+  }
+
+  // ================= 🟢 ROBUST CSV PARSER =================
+  const parseCSVLine = (text) => {
+    const result = [];
+    let cur = '';
+    let inQuotes = false;
+    for (let i = 0; i < text.length; i++) {
+      const c = text[i];
+      if (c === '"') {
+        inQuotes = !inQuotes;
+      } else if (c === ',' && !inQuotes) {
+        result.push(cur.trim());
+        cur = '';
+      } else {
+        cur += c;
+      }
+    }
+    result.push(cur.trim());
+    return result;
+  };
+
+  const startCSVImport = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
 
     const reader = new FileReader();
-    reader.onload = async ({ target }) => {
-      try {
-        setLoading(true)
-        const rows = target.result.split('\n').filter(r => r.trim());
-        let importCount = 0;
-
-        for (let i = 1; i < rows.length; i++) { 
-          const cols = rows[i].split(',').map(c => c.replace(/^"|"$/g, '').trim());
-          if (cols.length < 5) continue;
-          
-          const [sku, name, cost, price, stock] = cols;
-
-          const { data: newProd } = await supabase.from('products').insert({ sku, name }).select().single()
-          if(newProd) {
-            await supabase.from('branch_products').insert({
-              product_id: newProd.id,
-              branch_id: branch,
-              cost_price: Number(cost) || 0,
-              price: Number(price) || 0,
-              stock_quantity: Number(stock) || 0
-            })
-            importCount++;
-          }
-        }
-        showToast(`${importCount} products imported successfully!`, 'success')
-        loadInitialInventory()
-      } catch (err) {
-        showToast('Error importing CSV: ' + err.message, 'error')
-      } finally {
-        setLoading(false)
-        if(fileInputRef.current) fileInputRef.current.value = "";
+    reader.onload = ({ target }) => {
+      const rawLines = target.result.split(/\r?\n/).filter(r => r.trim());
+      if (rawLines.length < 2) {
+        showToast('CSV file is empty or invalid', 'error');
+        return;
       }
+
+      const headers = parseCSVLine(rawLines[0]).map(h => h.replace(/^"|"$/g, ''));
+      const data = rawLines.slice(1).map(line => parseCSVLine(line).map(c => c.replace(/^"|"$/g, '')));
+
+      setCsvHeaders(headers);
+      setCsvData(data);
+
+      const newMapping = { name: '', category: '', sku: '', cost_price: '', selling_price: '', stock_quantity: '' };
+      headers.forEach(h => {
+        const lower = h.toLowerCase();
+        if (lower.includes('name') || lower.includes('item') || lower.includes('description')) newMapping.name = h;
+        else if (lower.includes('category')) newMapping.category = h;
+        else if (lower.includes('sku') || lower.includes('barcode') || lower.includes('code') || lower.includes('part')) newMapping.sku = h;
+        else if (lower.includes('cost')) newMapping.cost_price = h;
+        else if (lower.includes('selling') || lower.includes('retail') || lower.includes('price') || lower.includes('mrp')) newMapping.selling_price = h;
+        else if (lower.includes('stock') || lower.includes('qty') || lower.includes('quantity')) newMapping.stock_quantity = h;
+      });
+
+      setFieldMapping(newMapping);
+      setImportStep(1);
+      if (fileInputRef.current) fileInputRef.current.value = "";
     };
     reader.readAsText(file);
-  }
+  };
 
-  // ================= 📊 DOUGHNUT CHART GENERATOR =================
-  const generateChartBase64 = () => {
-    const canvas = document.createElement('canvas');
-    canvas.width = 600; 
-    canvas.height = 300;
-    const ctx = canvas.getContext('2d');
+  const proceedToPreview = () => {
+    if (!fieldMapping.name || !fieldMapping.selling_price) {
+      showToast('Item Name and Selling Price fields are mandatory to map!', 'error');
+      return;
+    }
 
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(0, 0, 600, 300);
+    const pData = csvData.map((row, idx) => {
+      const getVal = (fieldKey) => {
+        const headerName = fieldMapping[fieldKey];
+        if (!headerName) return '';
+        const colIdx = csvHeaders.indexOf(headerName);
+        return (colIdx !== -1 && row[colIdx] !== undefined) ? row[colIdx] : '';
+      };
 
-    const data = [
-      { val: totalAdded, color: '#10B981', label: 'Total Added' },
-      { val: totalSold, color: '#EF4444', label: 'Total Sold' },
-      { val: totalBalance, color: '#3B82F6', label: 'Current Balance' }
-    ];
+      return {
+        id: idx,
+        name: getVal('name'),
+        category: getVal('category'),
+        selling_price: getVal('selling_price'),
+        cost_price: getVal('cost_price'),
+        stock_quantity: getVal('stock_quantity'),
+        barcode: getVal('sku') // UI එකේ තියෙන SKU mapping එක Barcode එකට සේව් කරනවා
+      };
+    }).filter(r => r.name);
 
-    const total = totalAdded + totalSold + totalBalance || 1; 
-    let startAngle = -Math.PI / 2;
-    const cx = 150, cy = 150, radius = 100, innerRadius = 60;
+    setPreviewData(pData);
+    setImportStep(2);
+  };
 
-    data.forEach(d => {
-      const sliceAngle = (d.val / total) * 2 * Math.PI;
-      ctx.beginPath();
-      ctx.arc(cx, cy, radius, startAngle, startAngle + sliceAngle);
-      ctx.arc(cx, cy, innerRadius, startAngle + sliceAngle, startAngle, true);
-      ctx.closePath();
-      ctx.fillStyle = d.color;
-      ctx.fill();
-      startAngle += sliceAngle;
-    });
+  const handlePreviewEdit = (idx, field, value) => {
+    const newData = [...previewData];
+    newData[idx][field] = value;
+    setPreviewData(newData);
+  };
 
-    ctx.fillStyle = '#1e293b';
-    ctx.font = 'bold 20px Arial';
-    ctx.fillText('Stock Movement Summary', 320, 100);
+  const cleanNumber = (val) => {
+    if (!val) return 0;
+    const cleaned = String(val).replace(/[^0-9.-]+/g, '');
+    const num = parseFloat(cleaned);
+    return isNaN(num) ? 0 : num;
+  };
 
-    data.forEach((d, i) => {
-      ctx.fillStyle = d.color;
-      ctx.fillRect(320, 140 + (i * 35), 20, 20);
-      ctx.fillStyle = '#475569';
-      ctx.font = '16px Arial';
-      ctx.fillText(`${d.label}: ${d.val} Units`, 355, 156 + (i * 35));
-    });
+  // 🚀 GUARANTEED 100% BULK IMPORT (Smart Syncs with Main Branch using Barcode/Part No)
+  const saveImportToDatabase = async () => {
+    try {
+      setLoading(true);
 
-    return canvas.toDataURL('image/png');
-  }
+      const validItems = previewData.filter(item => item.name && String(item.name).trim() !== '');
+      if (validItems.length === 0) {
+        showToast('No valid items to import', 'error');
+        setLoading(false);
+        return;
+      }
 
-  // ================= 📝 EXCEL EXPORT LOGIC =================
+      let successCount = 0;
+      const seenSkus = new Set();
+
+      // 🟢 Step 1: Clean Data & Auto-generate System SKUs if needed
+      const cleanedItems = validItems.map((item, idx) => {
+        let rawBarcode = item.barcode ? String(item.barcode).trim() : '';
+        
+        // අපි හැම අයිටම් එකකටම Unique System SKU එකක් හදනවා
+        let systemSku = `ITM-${Date.now().toString().slice(-5)}-${Math.floor(Math.random() * 9000) + 1000}`;
+        seenSkus.add(systemSku);
+
+        return {
+          name: String(item.name).trim(),
+          category: item.category ? String(item.category).trim() : 'Uncategorized',
+          costPrice: cleanNumber(item.cost_price),
+          sellingPrice: cleanNumber(item.selling_price) > 0 ? cleanNumber(item.selling_price) : 1,
+          stockQty: cleanNumber(item.stock_quantity),
+          sku: systemSku,
+          barcode: rawBarcode
+        };
+      });
+
+      const BATCH_SIZE = 50;
+      for (let i = 0; i < cleanedItems.length; i += BATCH_SIZE) {
+        const batch = cleanedItems.slice(i, i + BATCH_SIZE);
+        const batchBarcodes = batch.map(b => b.barcode).filter(Boolean); // Part Numbers ටික ගන්නවා
+
+        // 🟢 Step 2: Fetch existing products by Barcode (Smart Syncing)
+        let existingByBarcode = [];
+        if (batchBarcodes.length > 0) {
+          const { data } = await supabase
+            .from('products')
+            .select('id, sku, barcode')
+            .in('barcode', batchBarcodes);
+          existingByBarcode = data || [];
+        }
+
+        const existingMap = {};
+        existingByBarcode.forEach(p => { 
+          if (p.barcode) existingMap[p.barcode] = { id: p.id, sku: p.sku }; 
+        });
+
+        const newToInsert = [];
+        
+        batch.forEach(b => {
+          const match = existingMap[b.barcode];
+          if (match) {
+            // මේ Part Number එක කලින් Branch එකේදී ඇඩ් කරලා නම් ඒ Product ID එකම යූස් කරනවා!
+            b.finalProductId = match.id;
+          } else {
+            // නැත්නම් අලුත් එකක් හදන්න ලිස්ට් එකට දානවා
+            newToInsert.push({ sku: b.sku, barcode: b.barcode, name: b.name, category: b.category });
+          }
+        });
+
+        // 🟢 Step 3: Insert only the TRULY new products
+        if (newToInsert.length > 0) {
+          const { data: createdProds, error: pErr } = await supabase
+            .from('products')
+            .insert(newToInsert)
+            .select('id, sku, barcode');
+
+          if (!pErr && createdProds) {
+            createdProds.forEach(p => { 
+              if (p.barcode) existingMap[p.barcode] = { id: p.id, sku: p.sku };
+              const mappedBatchItem = batch.find(bi => bi.sku === p.sku);
+              if (mappedBatchItem) mappedBatchItem.finalProductId = p.id;
+            });
+          }
+        }
+
+        // 🟢 Step 4: Link Branch Products (With specific branch prices)
+        const branchPayloads = batch.map(b => {
+          const pId = b.finalProductId || existingMap[b.barcode]?.id;
+          if (!pId) return null;
+          
+          return {
+            product_id: pId,
+            branch_id: branch,
+            price: b.sellingPrice,
+            cost_price: b.costPrice,
+            stock_quantity: b.stockQty
+          };
+        }).filter(Boolean);
+
+        for (const bp of branchPayloads) {
+          const { data: exBp } = await supabase
+            .from('branch_products')
+            .select('id')
+            .eq('branch_id', branch)
+            .eq('product_id', bp.product_id)
+            .maybeSingle();
+
+          if (exBp) {
+            await supabase.from('branch_products').update({
+              price: bp.price,
+              cost_price: bp.cost_price,
+              stock_quantity: bp.stock_quantity
+            }).eq('id', exBp.id);
+          } else {
+            await supabase.from('branch_products').insert(bp);
+          }
+          successCount++;
+        }
+      }
+
+      showToast(`✅ Successfully imported all ${successCount} products!`, 'success');
+      setImportStep(0);
+      loadInitialInventory();
+    } catch (err) {
+      console.error("Import Error:", err);
+      showToast('Import Error: ' + err.message, 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // FILTER LOGIC
+  const filteredProducts = products.filter(p => 
+    p.name.toLowerCase().includes(search.toLowerCase()) || 
+    p.sku.toLowerCase().includes(search.toLowerCase()) ||
+    (p.barcode && p.barcode.toLowerCase().includes(search.toLowerCase())) ||
+    p.category.toLowerCase().includes(search.toLowerCase())
+  );
+
+  const metrics = [
+    { label: 'Total Stock Balance', value: totalBalance.toLocaleString(), icon: '📦' },
+    { label: 'Period Stock Sold', value: totalSold.toLocaleString(), icon: '🛍️' },
+    { label: 'Period Stock Added', value: totalAdded.toLocaleString(), icon: '📥' },
+    { label: 'Fast Moving Items', value: fastMovingList.length, icon: '🔥' }
+  ];
+
+  // ================= 📊 EXCEL EXPORT =================
   const exportExcel = async () => {
-    if (movements.length === 0) return showToast('No data to export.', 'error')
-    
-    setReportLoading(true)
+    if (movements.length === 0) return showToast('No data to export.', 'error');
+    setReportLoading(true);
     try {
       const ExcelJS = (await import('exceljs')).default;
       const { saveAs } = await import('file-saver');
-
       const workbook = new ExcelJS.Workbook();
       const worksheet = workbook.addWorksheet('Stock Report');
 
       worksheet.columns = [
-        { header: 'SKU', key: 'sku', width: 20 },
+        { header: 'System SKU', key: 'sku', width: 20 },
+        { header: 'Part No', key: 'barcode', width: 20 },
         { header: 'Item Name', key: 'name', width: 45 },
         { header: 'Added (+)', key: 'added', width: 15 },
         { header: 'Added Value', key: 'added_value', width: 20 },
@@ -416,54 +596,27 @@ export default function Inventory() {
 
       movements.forEach(m => {
         worksheet.addRow({
-          sku: m.sku, 
-          name: m.name, 
-          added: m.added, 
-          added_value: m.added * m.cost,
-          sold: m.sold, 
-          sold_value: m.sold * m.price,
-          balance: m.balance,
-          balance_value: m.balance * m.cost
+          sku: m.sku, barcode: m.barcode, name: m.name, added: m.added, added_value: m.added * m.cost, sold: m.sold, sold_value: m.sold * m.price, balance: m.balance, balance_value: m.balance * m.cost
         });
       });
 
       worksheet.eachRow((row, rowNumber) => {
         if(rowNumber > 1) {
           row.getCell('added').font = { color: { argb: 'FF10B981' }, bold: true }; 
-          row.getCell('added_value').font = { color: { argb: 'FF10B981' } }; 
           row.getCell('sold').font = { color: { argb: 'FFEF4444' }, bold: true };
-          row.getCell('sold_value').font = { color: { argb: 'FFEF4444' } };
           row.getCell('balance').font = { color: { argb: 'FF3B82F6' }, bold: true };
-          row.getCell('balance_value').font = { color: { argb: 'FF3B82F6' } };
           row.alignment = { vertical: 'middle' };
         }
       });
-
-      const base64Image = generateChartBase64();
-      const imageId = workbook.addImage({ base64: base64Image, extension: 'png' });
-      
-      worksheet.addImage(imageId, {
-        tl: { col: 8, row: 1 }, 
-        ext: { width: 500, height: 250 } 
-      });
-
       const buffer = await workbook.xlsx.writeBuffer();
       saveAs(new Blob([buffer]), `Stock_Movement_${dateFrom || 'All'}_to_${dateTo || 'All'}.xlsx`);
-      showToast('Excel report generated beautifully!', 'success')
+      showToast('Excel report generated beautifully!', 'success');
     } catch (err) {
-      console.error(err)
-      showToast('Failed to export Excel', 'error')
+      showToast('Failed to export Excel', 'error');
     } finally {
-      setReportLoading(false)
+      setReportLoading(false);
     }
-  }
-
-  const metrics = [
-    { label: 'Total Stock Balance', value: totalBalance.toLocaleString(), icon: '📦' },
-    { label: 'Period Stock Sold', value: totalSold.toLocaleString(), icon: '🛍️' },
-    { label: 'Period Stock Added', value: totalAdded.toLocaleString(), icon: '📥' },
-    { label: 'Fast Moving Items', value: fastMovingList.length, icon: '🔥' }
-  ]
+  };
 
   return (
     <PageTemplate
@@ -473,23 +626,18 @@ export default function Inventory() {
     >
       <div className="space-y-6 pb-10">
 
-        {/* HIGHLIGHTED FAST MOVING PRODUCTS */}
         {fastMovingList.length > 0 && (
           <div className="bg-gradient-to-r from-amber-50 to-orange-50 dark:from-amber-950/30 dark:to-orange-950/20 p-5 rounded-xl border border-orange-200 dark:border-orange-800/50 shadow-sm">
             <div className="flex items-center gap-2 mb-3">
               <span className="text-xl">🔥</span>
-              <h3 className="font-extrabold text-orange-900 dark:text-orange-300 text-base">
-                Fast Moving Products (Highest Lifetime Demand)
-              </h3>
+              <h3 className="font-extrabold text-orange-900 dark:text-orange-300 text-base">Fast Moving Products (Highest Lifetime Demand)</h3>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
               {fastMovingList.map((item, idx) => (
                 <div key={item.id} className="bg-white dark:bg-gray-800 p-3.5 rounded-lg border border-orange-200 dark:border-gray-700 shadow-sm flex flex-col justify-between">
                   <div>
                     <div className="flex justify-between items-start">
-                      <span className="text-[10px] font-bold bg-orange-100 text-orange-700 dark:bg-orange-900/50 dark:text-orange-300 px-2 py-0.5 rounded-full uppercase">
-                        Rank #{idx + 1}
-                      </span>
+                      <span className="text-[10px] font-bold bg-orange-100 text-orange-700 dark:bg-orange-900/50 dark:text-orange-300 px-2 py-0.5 rounded-full uppercase">Rank #{idx + 1}</span>
                       <span className="text-xs font-mono text-gray-400">{item.sku}</span>
                     </div>
                     <p className="font-bold text-gray-900 dark:text-white mt-2 line-clamp-1">{item.name}</p>
@@ -510,9 +658,9 @@ export default function Inventory() {
             <h3 className="font-bold text-gray-800 dark:text-white text-base">Current Product Stock Overview</h3>
             
             <div className="flex flex-wrap items-center gap-2 w-full md:w-auto">
-              <input type="file" accept=".csv" ref={fileInputRef} onChange={handleCSVImport} className="hidden" />
+              <input type="file" accept=".csv" ref={fileInputRef} onChange={startCSVImport} className="hidden" />
               
-              <button onClick={() => fileInputRef.current.click()} className="bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-white px-3 py-1.5 rounded-lg text-sm font-bold shadow-sm transition flex items-center gap-1.5 border border-gray-300 dark:border-gray-600">
+              <button onClick={() => fileInputRef.current.click()} className="bg-emerald-100 hover:bg-emerald-200 dark:bg-emerald-900/30 text-emerald-800 dark:text-emerald-400 px-3 py-1.5 rounded-lg text-sm font-bold shadow-sm transition flex items-center gap-1.5 border border-emerald-200 dark:border-emerald-800/50">
                 <FiUpload size={14} /> Import CSV
               </button>
               
@@ -522,20 +670,46 @@ export default function Inventory() {
 
               <input
                 type="text"
-                placeholder="🔍 Search SKU or Name..."
-                className="w-full sm:w-56 border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-1.5 text-sm bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white outline-none"
+                placeholder="🔍 Search System SKU, Part No, Name..."
+                className="w-full sm:w-64 border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-1.5 text-sm bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white outline-none"
                 value={search}
                 onChange={e => setSearch(e.target.value)}
               />
             </div>
           </div>
 
-          <div className="overflow-x-auto overflow-y-auto max-h-[500px] custom-scrollbar border border-gray-100 dark:border-gray-700 rounded-lg">
+          {/* 🟢 BULK ACTION BAR */}
+          {selectedProducts.length > 0 && (
+            <div className="flex justify-between items-center bg-blue-50 dark:bg-blue-900/40 border border-blue-200 dark:border-blue-800 rounded-lg p-3 mb-4 animate-fadeIn">
+              <span className="text-sm font-bold text-blue-800 dark:text-blue-300">
+                {selectedProducts.length} item(s) selected
+              </span>
+              <button 
+                onClick={handleBulkDelete}
+                className="px-4 py-1.5 bg-red-600 hover:bg-red-700 text-white text-xs font-bold rounded-lg shadow-sm flex items-center gap-2 transition"
+              >
+                <FiTrash2 size={14} /> Delete Selected
+              </button>
+            </div>
+          )}
+
+          <div className="overflow-x-auto overflow-y-auto max-h-[500px] custom-scrollbar border border-gray-100 dark:border-gray-700 rounded-lg relative">
             <table className="w-full text-left border-collapse min-w-[1050px]">
               <thead className="sticky top-0 bg-gray-50 dark:bg-gray-700 shadow-sm z-10">
                 <tr className="text-[11px] font-bold text-gray-500 uppercase tracking-wider">
-                  <th className="p-3 border-b dark:border-gray-600">SKU</th>
-                  <th className="p-3 border-b dark:border-gray-600">Item Name</th>
+                  <th className="p-3 border-b dark:border-gray-600 w-10 text-center">
+                    <input 
+                      type="checkbox" 
+                      className="w-4 h-4 rounded border-gray-300 cursor-pointer"
+                      checked={selectedProducts.length === filteredProducts.length && filteredProducts.length > 0}
+                      onChange={(e) => {
+                        if (e.target.checked) setSelectedProducts(filteredProducts.map(p => p.product_id))
+                        else setSelectedProducts([])
+                      }}
+                    />
+                  </th>
+                  <th className="p-3 border-b dark:border-gray-600">System SKU & Part No</th>
+                  <th className="p-3 border-b dark:border-gray-600">Item Name & Category</th>
                   <th className="p-3 border-b dark:border-gray-600 text-right">Cost Price</th>
                   <th className="p-3 border-b dark:border-gray-600 text-right">Selling Price</th>
                   <th className="p-3 border-b dark:border-gray-600 text-center text-green-600 bg-green-50/50 dark:bg-green-900/10">Added (+) & Value</th>
@@ -545,43 +719,58 @@ export default function Inventory() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100 dark:divide-gray-700 text-sm">
-                {products
-                  .filter(p => p.name.toLowerCase().includes(search.toLowerCase()) || p.sku.toLowerCase().includes(search.toLowerCase()))
-                  .map(p => {
-                    const isHot = fastMovingList.some(fm => fm.id === p.id);
-                    return (
-                    <tr key={p.id} className="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition">
-                      <td className="p-3 font-mono text-xs text-gray-500">{p.sku}</td>
-                      <td className="p-3 font-semibold text-gray-900 dark:text-white max-w-[200px] truncate" title={p.name}>
-                        {p.name}
-                        {isHot && <span className="ml-2 px-1.5 py-0.5 bg-orange-100 text-orange-600 rounded text-[10px] font-bold border border-orange-200">🔥 HOT</span>}
-                      </td>
-                      <td className="p-3 text-right text-gray-600 dark:text-gray-400">{currency}{p.cost.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
-                      <td className="p-3 text-right font-bold text-gray-800 dark:text-white">{currency}{p.price.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
-                      
-                      <td className="p-3 text-center bg-green-50/30 dark:bg-green-900/10">
-                        <div className="font-bold text-green-600">{p.lifetimeAdded > 0 ? `+${p.lifetimeAdded}` : '0'}</div>
-                        {p.lifetimeAdded > 0 && <div className="text-[10px] text-green-700/70 dark:text-green-400/70 mt-0.5">{currency}{(p.lifetimeAdded * p.cost).toLocaleString(undefined, {minimumFractionDigits: 2})}</div>}
-                      </td>
-                      
-                      <td className="p-3 text-center bg-red-50/30 dark:bg-red-900/10">
-                        <div className="font-bold text-red-500">{p.lifetimeSold > 0 ? `-${p.lifetimeSold}` : '0'}</div>
-                        {p.lifetimeSold > 0 && <div className="text-[10px] text-red-700/70 dark:text-red-400/70 mt-0.5">{currency}{(p.lifetimeSold * p.price).toLocaleString(undefined, {minimumFractionDigits: 2})}</div>}
-                      </td>
-                      
-                      <td className="p-3 text-center bg-blue-50/30 dark:bg-blue-900/10">
-                        <div className="font-extrabold text-blue-700 dark:text-blue-400">{p.stock}</div>
-                        {p.stock > 0 && <div className="text-[10px] text-blue-700/70 dark:text-blue-400/70 mt-0.5">{currency}{(p.stock * p.cost).toLocaleString(undefined, {minimumFractionDigits: 2})}</div>}
-                      </td>
+                {filteredProducts.map(p => {
+                  const isHot = fastMovingList.some(fm => fm.id === p.id);
+                  return (
+                  <tr key={p.id} className="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition">
+                    <td className="p-3 text-center">
+                      <input 
+                        type="checkbox"
+                        className="w-4 h-4 rounded border-gray-300 cursor-pointer"
+                        checked={selectedProducts.includes(p.product_id)}
+                        onChange={(e) => {
+                          if (e.target.checked) setSelectedProducts([...selectedProducts, p.product_id])
+                          else setSelectedProducts(selectedProducts.filter(id => id !== p.product_id))
+                        }}
+                      />
+                    </td>
+                    <td className="p-3">
+                      <div className="font-mono text-xs font-bold text-gray-800 dark:text-gray-200">{p.sku}</div>
+                      {p.barcode && <div className="text-[10px] text-gray-500 font-mono mt-0.5">Part: {p.barcode}</div>}
+                    </td>
+                    <td className="p-3 font-semibold text-gray-900 dark:text-white max-w-[200px] truncate" title={p.name}>
+                      <div className="flex items-center gap-2">
+                        <span className="truncate">{p.name}</span>
+                        {isHot && <span className="px-1.5 py-0.5 bg-orange-100 text-orange-600 rounded text-[9px] font-bold border border-orange-200">🔥 HOT</span>}
+                      </div>
+                      <div className="text-[10px] text-gray-400 font-normal mt-0.5 bg-gray-100 dark:bg-gray-800 w-max px-2 py-0.5 rounded-full">{p.category}</div>
+                    </td>
+                    <td className="p-3 text-right text-gray-600 dark:text-gray-400">{currency}{p.cost.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
+                    <td className="p-3 text-right font-bold text-gray-800 dark:text-white">{currency}{p.price.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
+                    
+                    <td className="p-3 text-center bg-green-50/30 dark:bg-green-900/10">
+                      <div className="font-bold text-green-600">{p.lifetimeAdded > 0 ? `+${p.lifetimeAdded}` : '0'}</div>
+                      {p.lifetimeAdded > 0 && <div className="text-[10px] text-green-700/70 dark:text-green-400/70 mt-0.5">{currency}{(p.lifetimeAdded * p.cost).toLocaleString(undefined, {minimumFractionDigits: 2})}</div>}
+                    </td>
+                    
+                    <td className="p-3 text-center bg-red-50/30 dark:bg-red-900/10">
+                      <div className="font-bold text-red-500">{p.lifetimeSold > 0 ? `-${p.lifetimeSold}` : '0'}</div>
+                      {p.lifetimeSold > 0 && <div className="text-[10px] text-red-700/70 dark:text-red-400/70 mt-0.5">{currency}{(p.lifetimeSold * p.price).toLocaleString(undefined, {minimumFractionDigits: 2})}</div>}
+                    </td>
+                    
+                    <td className="p-3 text-center bg-blue-50/30 dark:bg-blue-900/10">
+                      <div className="font-extrabold text-blue-700 dark:text-blue-400">{p.stock}</div>
+                      {p.stock > 0 && <div className="text-[10px] text-blue-700/70 dark:text-blue-400/70 mt-0.5">{currency}{(p.stock * p.cost).toLocaleString(undefined, {minimumFractionDigits: 2})}</div>}
+                    </td>
 
-                      <td className="p-3 text-center">
-                        <div className="flex justify-center gap-2">
-                          <button onClick={() => handleEdit(p)} className="p-1.5 bg-blue-50 text-blue-600 hover:bg-blue-100 dark:bg-blue-900/30 dark:text-blue-400 rounded-md transition"><FiEdit size={14}/></button>
-                          <button onClick={() => handleDelete(p.product_id)} className="p-1.5 bg-red-50 text-red-600 hover:bg-red-100 dark:bg-red-900/30 dark:text-red-400 rounded-md transition"><FiTrash2 size={14}/></button>
-                        </div>
-                      </td>
-                    </tr>
-                  )})}
+                    <td className="p-3 text-center">
+                      <div className="flex justify-center gap-2">
+                        <button onClick={() => handleEdit(p)} className="p-1.5 bg-blue-50 text-blue-600 hover:bg-blue-100 dark:bg-blue-900/30 dark:text-blue-400 rounded-md transition"><FiEdit size={14}/></button>
+                        <button onClick={() => handleDelete(p.product_id)} className="p-1.5 bg-red-50 text-red-600 hover:bg-red-100 dark:bg-red-900/30 dark:text-red-400 rounded-md transition"><FiTrash2 size={14}/></button>
+                      </div>
+                    </td>
+                  </tr>
+                )})}
               </tbody>
             </table>
           </div>
@@ -591,63 +780,34 @@ export default function Inventory() {
         <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-5">
           <div className="flex flex-col xl:flex-row justify-between items-start xl:items-center gap-4 mb-5 border-b pb-4 dark:border-gray-700">
             <div>
-              <h3 className="font-bold text-gray-800 dark:text-white text-base flex items-center gap-2">
-                📈 Stock Movement Report
-              </h3>
+              <h3 className="font-bold text-gray-800 dark:text-white text-base flex items-center gap-2">📈 Stock Movement Report</h3>
               <p className="text-xs text-gray-500 mt-0.5">Filter by date range, track values and export beautifully</p>
             </div>
-
             <div className="flex flex-wrap items-center gap-2 w-full xl:w-auto">
               <div className="flex items-center gap-1 text-xs">
                 <span className="text-gray-500">From:</span>
-                <input
-                  type="date"
-                  className="border border-gray-300 dark:border-gray-600 rounded-lg px-2 py-1.5 bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white outline-none focus:border-blue-500"
-                  value={dateFrom}
-                  onChange={e => setDateFrom(e.target.value)}
-                />
+                <input type="date" className="border border-gray-300 dark:border-gray-600 rounded-lg px-2 py-1.5 bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white outline-none focus:border-blue-500" value={dateFrom} onChange={e => setDateFrom(e.target.value)} />
               </div>
-
               <div className="flex items-center gap-1 text-xs">
                 <span className="text-gray-500">To:</span>
-                <input
-                  type="date"
-                  className="border border-gray-300 dark:border-gray-600 rounded-lg px-2 py-1.5 bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white outline-none focus:border-blue-500"
-                  value={dateTo}
-                  onChange={e => setDateTo(e.target.value)}
-                />
+                <input type="date" className="border border-gray-300 dark:border-gray-600 rounded-lg px-2 py-1.5 bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white outline-none focus:border-blue-500" value={dateTo} onChange={e => setDateTo(e.target.value)} />
               </div>
-
-              <button 
-                onClick={() => generateMovementReport(products, dateFrom, dateTo)} 
-                disabled={reportLoading} 
-                className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold px-3 py-1.5 rounded-lg transition text-xs shadow-sm disabled:opacity-50 flex items-center gap-1"
-              >
+              <button onClick={() => generateMovementReport(products, dateFrom, dateTo)} disabled={reportLoading} className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold px-3 py-1.5 rounded-lg transition text-xs shadow-sm disabled:opacity-50 flex items-center gap-1">
                 <FiRefreshCw className={reportLoading ? 'animate-spin' : ''} /> Load
               </button>
-
-              <button 
-                onClick={handleClearDates} 
-                className="bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-200 font-bold px-3 py-1.5 rounded-lg transition text-xs shadow-sm flex items-center gap-1"
-              >
+              <button onClick={handleClearDates} className="bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-200 font-bold px-3 py-1.5 rounded-lg transition text-xs shadow-sm flex items-center gap-1">
                 <FiX /> Clear
               </button>
-
-              <button 
-                onClick={exportExcel} 
-                disabled={movements.length === 0} 
-                className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-4 py-1.5 rounded-lg transition text-xs shadow-sm disabled:opacity-50 flex items-center gap-1"
-              >
+              <button onClick={exportExcel} disabled={movements.length === 0} className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-4 py-1.5 rounded-lg transition text-xs shadow-sm disabled:opacity-50 flex items-center gap-1">
                 <FiDownload size={14}/> Export Excel
               </button>
             </div>
           </div>
-
           <div className="overflow-x-auto overflow-y-auto max-h-[400px] custom-scrollbar border border-gray-100 dark:border-gray-700 rounded-lg">
             <table className="w-full text-left border-collapse min-w-[800px]">
               <thead className="sticky top-0 bg-gray-50 dark:bg-gray-700 shadow-sm z-10">
                 <tr className="text-[11px] font-bold text-gray-500 uppercase tracking-wider">
-                  <th className="p-3 border-b dark:border-gray-600">SKU</th>
+                  <th className="p-3 border-b dark:border-gray-600">System SKU</th>
                   <th className="p-3 border-b dark:border-gray-600">Item Name</th>
                   <th className="p-3 border-b dark:border-gray-600 text-center text-green-600 bg-green-50/50 dark:bg-green-900/10">Added (+) & Value</th>
                   <th className="p-3 border-b dark:border-gray-600 text-center text-red-600 bg-red-50/50 dark:bg-red-900/10">Sold (-) & Value</th>
@@ -656,31 +816,15 @@ export default function Inventory() {
               </thead>
               <tbody className="divide-y divide-gray-100 dark:divide-gray-700 text-sm">
                 {movements.length === 0 ? (
-                  <tr>
-                    <td colSpan="5" className="p-8 text-center text-gray-400 font-medium">
-                      No stock movement to display. Set a date range or Clear to view all.
-                    </td>
-                  </tr>
+                  <tr><td colSpan="5" className="p-8 text-center text-gray-400 font-medium">No stock movement to display. Set a date range or Clear to view all.</td></tr>
                 ) : (
                   movements.map(m => (
                     <tr key={m.id} className="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition">
                       <td className="p-3 font-mono text-xs text-gray-500">{m.sku}</td>
                       <td className="p-3 font-semibold text-gray-900 dark:text-white max-w-[250px] truncate" title={m.name}>{m.name}</td>
-                      
-                      <td className="p-3 text-center bg-green-50/30 dark:bg-green-900/10">
-                        <div className="font-bold text-green-600">{m.added > 0 ? `+${m.added}` : '0'}</div>
-                        {m.added > 0 && <div className="text-[10px] text-green-700/70 dark:text-green-400/70 mt-0.5">{currency}{(m.added * m.cost).toLocaleString(undefined, {minimumFractionDigits: 2})}</div>}
-                      </td>
-                      
-                      <td className="p-3 text-center bg-red-50/30 dark:bg-red-900/10">
-                        <div className="font-bold text-red-500">{m.sold > 0 ? `-${m.sold}` : '0'}</div>
-                        {m.sold > 0 && <div className="text-[10px] text-red-700/70 dark:text-red-400/70 mt-0.5">{currency}{(m.sold * m.price).toLocaleString(undefined, {minimumFractionDigits: 2})}</div>}
-                      </td>
-                      
-                      <td className="p-3 text-center bg-blue-50/30 dark:bg-blue-900/10">
-                        <div className="font-extrabold text-gray-900 dark:text-white">{m.balance}</div>
-                        {m.balance > 0 && <div className="text-[10px] text-blue-700/70 dark:text-blue-400/70 mt-0.5">{currency}{(m.balance * m.cost).toLocaleString(undefined, {minimumFractionDigits: 2})}</div>}
-                      </td>
+                      <td className="p-3 text-center bg-green-50/30 dark:bg-green-900/10"><div className="font-bold text-green-600">{m.added > 0 ? `+${m.added}` : '0'}</div>{m.added > 0 && <div className="text-[10px] text-green-700/70 mt-0.5">{currency}{(m.added * m.cost).toLocaleString(undefined, {minimumFractionDigits: 2})}</div>}</td>
+                      <td className="p-3 text-center bg-red-50/30 dark:bg-red-900/10"><div className="font-bold text-red-500">{m.sold > 0 ? `-${m.sold}` : '0'}</div>{m.sold > 0 && <div className="text-[10px] text-red-700/70 mt-0.5">{currency}{(m.sold * m.price).toLocaleString(undefined, {minimumFractionDigits: 2})}</div>}</td>
+                      <td className="p-3 text-center bg-blue-50/30 dark:bg-blue-900/10"><div className="font-extrabold text-gray-900 dark:text-white">{m.balance}</div>{m.balance > 0 && <div className="text-[10px] text-blue-700/70 mt-0.5">{currency}{(m.balance * m.cost).toLocaleString(undefined, {minimumFractionDigits: 2})}</div>}</td>
                     </tr>
                   ))
                 )}
@@ -689,7 +833,7 @@ export default function Inventory() {
           </div>
         </div>
 
-        {/* ================= ZOBAZE-STYLE ADVANCED MODAL ================= */}
+        {/* ================= NORMAL ADD/EDIT MODAL ================= */}
         {isModalOpen && (
           <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 sm:p-0 animate-fadeIn">
             <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-lg overflow-hidden transform animate-scaleIn flex flex-col max-h-[90vh]">
@@ -699,37 +843,29 @@ export default function Inventory() {
                   {isEditing ? <FiEdit size={18} /> : <FiPlus size={18} />}
                   <h3 className="font-bold tracking-wide">{isEditing ? 'MANAGE ITEM' : 'ADD NEW ITEM'}</h3>
                 </div>
-                <button onClick={() => setIsModalOpen(false)} className="text-blue-100 hover:text-white transition bg-blue-700 p-1.5 rounded-lg">
-                  <FiX size={20} />
-                </button>
+                <button onClick={() => setIsModalOpen(false)} className="text-blue-100 hover:text-white transition bg-blue-700 p-1.5 rounded-lg"><FiX size={20} /></button>
               </div>
 
               <div className="overflow-y-auto p-5 space-y-5 custom-scrollbar bg-gray-50 dark:bg-gray-900">
                 <div className="flex items-center gap-4 bg-white dark:bg-gray-800 p-3 rounded-lg border border-gray-200 dark:border-gray-700">
                   <div className="w-12 h-12 rounded-full bg-red-500 flex items-center justify-center text-white shrink-0 relative shadow-sm">
                     <FiBox size={20} />
-                    <div className="absolute -bottom-1 -right-1 bg-white text-blue-600 rounded-full p-1 shadow">
-                      <FiEdit size={10} />
-                    </div>
+                    <div className="absolute -bottom-1 -right-1 bg-white text-blue-600 rounded-full p-1 shadow"><FiEdit size={10} /></div>
                   </div>
                   <div className="w-full space-y-2">
                     <div>
                       <label className="text-[10px] font-bold text-gray-500 uppercase">Item Name *</label>
-                      <input 
-                        type="text" 
-                        value={formData.name} 
-                        onChange={e => setFormData({...formData, name: e.target.value})}
-                        className="w-full font-bold text-lg bg-transparent border-b border-gray-300 dark:border-gray-600 outline-none pb-1 text-gray-900 dark:text-white focus:border-blue-500"
-                      />
+                      <input type="text" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} className="w-full font-bold text-lg bg-transparent border-b border-gray-300 dark:border-gray-600 outline-none pb-1 text-gray-900 dark:text-white focus:border-blue-500" />
                     </div>
-                    <div>
-                      <label className="text-[10px] font-bold text-gray-500 uppercase">SKU (Auto-generated if empty)</label>
-                      <input 
-                        type="text" 
-                        value={formData.sku} 
-                        onChange={e => setFormData({...formData, sku: e.target.value})}
-                        className="w-full font-mono text-sm bg-transparent border-b border-gray-300 dark:border-gray-600 outline-none pb-1 text-gray-500 dark:text-gray-400 focus:border-blue-500"
-                      />
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="text-[10px] font-bold text-gray-500 uppercase">Category</label>
+                        <input type="text" value={formData.category} onChange={e => setFormData({...formData, category: e.target.value})} className="w-full font-semibold text-sm bg-transparent border-b border-gray-300 dark:border-gray-600 outline-none pb-1 text-gray-700 dark:text-gray-300 focus:border-blue-500" placeholder="e.g. Spare Parts" />
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-bold text-gray-500 uppercase">Part Number / Barcode</label>
+                        <input type="text" value={formData.barcode} onChange={e => setFormData({...formData, barcode: e.target.value})} className="w-full font-mono text-sm bg-transparent border-b border-gray-300 dark:border-gray-600 outline-none pb-1 text-gray-500 dark:text-gray-400 focus:border-blue-500" placeholder="Leave empty if none" />
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -737,107 +873,163 @@ export default function Inventory() {
                 <div className="bg-white dark:bg-gray-800 p-4 rounded-lg border border-gray-200 dark:border-gray-700 grid grid-cols-2 gap-4">
                   <div>
                     <label className="text-xs font-semibold text-gray-500 mb-1 block">Cost Price</label>
-                    <input 
-                      type="number" 
-                      value={formData.cost_price} 
-                      onChange={e => setFormData({...formData, cost_price: e.target.value})}
-                      className="w-full border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700 rounded-md px-3 py-2 font-bold outline-none focus:border-blue-500 text-gray-900 dark:text-white"
-                    />
+                    <input type="number" value={formData.cost_price} onChange={e => setFormData({...formData, cost_price: e.target.value})} className="w-full border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700 rounded-md px-3 py-2 font-bold outline-none focus:border-blue-500 text-gray-900 dark:text-white" />
                   </div>
                   <div>
                     <label className="text-xs font-semibold text-gray-500 mb-1 block">Selling Price *</label>
-                    <input 
-                      type="number" 
-                      value={formData.selling_price} 
-                      onChange={e => setFormData({...formData, selling_price: e.target.value})}
-                      className="w-full border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700 rounded-md px-3 py-2 font-bold outline-none focus:border-blue-500 text-gray-900 dark:text-white"
-                    />
+                    <input type="number" value={formData.selling_price} onChange={e => setFormData({...formData, selling_price: e.target.value})} className="w-full border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700 rounded-md px-3 py-2 font-bold outline-none focus:border-blue-500 text-gray-900 dark:text-white" />
                   </div>
                   <div>
                     <label className="text-xs font-semibold text-gray-500 mb-1 block">Stock Available</label>
-                    <input 
-                      type="number" 
-                      value={formData.stock_quantity} 
-                      onChange={e => setFormData({...formData, stock_quantity: e.target.value})}
-                      className="w-full border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700 rounded-md px-3 py-2 font-bold outline-none focus:border-blue-500 text-gray-900 dark:text-white"
-                    />
+                    <input type="number" value={formData.stock_quantity} onChange={e => setFormData({...formData, stock_quantity: e.target.value})} className="w-full border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700 rounded-md px-3 py-2 font-bold outline-none focus:border-blue-500 text-gray-900 dark:text-white" />
                   </div>
                   <div className="flex flex-col items-center justify-center">
                     <label className="text-xs font-semibold text-gray-500 mb-2 block text-center">Track Profit?</label>
-                    <button onClick={() => toggleFeature('track_profit')} className="text-2xl text-blue-600 dark:text-blue-400">
-                      {formData.track_profit ? <FiCheckSquare /> : <FiSquare className="text-gray-400" />}
-                    </button>
+                    <button onClick={() => toggleFeature('track_profit')} className="text-2xl text-blue-600 dark:text-blue-400">{formData.track_profit ? <FiCheckSquare /> : <FiSquare className="text-gray-400" />}</button>
                   </div>
                 </div>
 
                 <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 divide-y divide-gray-100 dark:divide-gray-700">
                   <div className="flex items-center justify-between p-3.5 hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer" onClick={() => toggleFeature('auto_update_stock')}>
-                    <div className="flex items-center gap-3">
-                      <div className="p-1.5 bg-blue-100 dark:bg-blue-900/30 text-blue-600 rounded"><FiRepeat size={16} /></div>
-                      <span className="text-sm font-semibold text-gray-700 dark:text-gray-200">Auto-update stock on item sales</span>
-                    </div>
+                    <div className="flex items-center gap-3"><div className="p-1.5 bg-blue-100 dark:bg-blue-900/30 text-blue-600 rounded"><FiRepeat size={16} /></div><span className="text-sm font-semibold text-gray-700 dark:text-gray-200">Auto-update stock on item sales</span></div>
                     <div className="text-xl text-blue-600 dark:text-blue-400">{formData.auto_update_stock ? <FiCheckSquare /> : <FiSquare className="text-gray-400" />}</div>
                   </div>
-
                   <div className="flex items-center justify-between p-3.5 hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer border-l-4 border-green-400" onClick={() => toggleFeature('prevent_out_of_stock_sale')}>
-                    <div className="flex items-center gap-3">
-                      <div className="p-1.5 bg-green-100 dark:bg-green-900/30 text-green-600 rounded"><FiLock size={16} /></div>
-                      <span className="text-sm font-semibold text-gray-700 dark:text-gray-200">Prevent item sale when out of stock?</span>
-                    </div>
+                    <div className="flex items-center gap-3"><div className="p-1.5 bg-green-100 dark:bg-green-900/30 text-green-600 rounded"><FiLock size={16} /></div><span className="text-sm font-semibold text-gray-700 dark:text-gray-200">Prevent item sale when out of stock?</span></div>
                     <div className="text-xl text-blue-600 dark:text-blue-400">{formData.prevent_out_of_stock_sale ? <FiCheckSquare /> : <FiSquare className="text-gray-400" />}</div>
-                  </div>
-
-                  <div className="flex items-center justify-between p-3.5 hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer" onClick={() => toggleFeature('low_stock_alerts')}>
-                    <div className="flex items-center gap-3">
-                      <div className="p-1.5 bg-yellow-100 dark:bg-yellow-900/30 text-yellow-600 rounded"><FiAlertCircle size={16} /></div>
-                      <span className="text-sm font-semibold text-gray-700 dark:text-gray-200">Low stock alerts?</span>
-                    </div>
-                    <div className="text-xl text-blue-600 dark:text-blue-400">{formData.low_stock_alerts ? <FiCheckSquare /> : <FiSquare className="text-gray-400" />}</div>
-                  </div>
-
-                  <div className="flex items-center justify-between p-3.5 hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer" onClick={() => toggleFeature('has_barcode')}>
-                    <div className="flex items-center gap-3">
-                      <div className="p-1.5 bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 rounded text-xs font-mono font-bold tracking-widest">|||||</div>
-                      <span className="text-sm font-semibold text-gray-700 dark:text-gray-200">Barcode?</span>
-                    </div>
-                    <div className="text-xl text-blue-600 dark:text-blue-400">{formData.has_barcode ? <FiCheckSquare /> : <FiSquare className="text-gray-400" />}</div>
-                  </div>
-
-                  <div className="flex items-center justify-between p-3.5 hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer" onClick={() => toggleFeature('track_expiry')}>
-                    <div className="flex items-center gap-3">
-                      <div className="p-1.5 bg-purple-100 dark:bg-purple-900/30 text-purple-600 rounded"><FiAlertCircle size={16} /></div>
-                      <span className="text-sm font-semibold text-gray-700 dark:text-gray-200">Track Expiry?</span>
-                    </div>
-                    <div className="text-xl text-blue-600 dark:text-blue-400">{formData.track_expiry ? <FiCheckSquare /> : <FiSquare className="text-gray-400" />}</div>
-                  </div>
-
-                  <div className="flex items-center justify-between p-3.5 hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer" onClick={() => toggleFeature('add_tax')}>
-                    <div className="flex items-center gap-3">
-                      <div className="p-1.5 bg-orange-100 dark:bg-orange-900/30 text-orange-600 rounded text-[10px] font-black uppercase">TAX</div>
-                      <span className="text-sm font-semibold text-gray-700 dark:text-gray-200">Add Tax</span>
-                    </div>
-                    <div className="text-xl text-blue-600 dark:text-blue-400">{formData.add_tax ? <FiCheckSquare /> : <FiSquare className="text-gray-400" />}</div>
                   </div>
                 </div>
               </div>
 
               <div className="flex p-4 bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 gap-3">
                 {isEditing && (
-                  <button 
-                    onClick={() => handleDelete(currentProductId)}
-                    className="flex-1 py-3.5 rounded-xl text-sm font-bold text-white bg-red-500 hover:bg-red-600 transition shadow-sm uppercase tracking-wide"
-                  >
-                    Delete
-                  </button>
+                  <button onClick={() => handleDelete(currentProductId)} className="flex-1 py-3.5 rounded-xl text-sm font-bold text-white bg-red-500 hover:bg-red-600 transition shadow-sm uppercase tracking-wide">Delete</button>
                 )}
-                <button 
-                  onClick={handleSaveModal}
-                  className="flex-[2] py-3.5 rounded-xl text-sm font-bold text-white bg-blue-600 hover:bg-blue-700 transition shadow-md uppercase tracking-wide"
-                >
+                <button onClick={handleSaveModal} className="flex-[2] py-3.5 rounded-xl text-sm font-bold text-white bg-blue-600 hover:bg-blue-700 transition shadow-md uppercase tracking-wide">
                   {isEditing ? 'Save Changes' : 'Add Item'}
                 </button>
               </div>
 
+            </div>
+          </div>
+        )}
+
+        {/* ================= 🟢 CSV IMPORT MAPPING MODAL (Step 1) ================= */}
+        {importStep === 1 && (
+          <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 animate-fadeIn">
+            <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl w-full max-w-4xl overflow-hidden flex flex-col max-h-[90vh]">
+              <div className="p-5 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 flex justify-between items-center">
+                <div>
+                  <h2 className="text-lg font-bold text-gray-800 dark:text-white flex items-center gap-2"><FiUpload /> Map CSV Columns</h2>
+                  <p className="text-sm text-gray-500 mt-1">Select which column from your file matches our system fields.</p>
+                </div>
+                <button onClick={() => setImportStep(0)} className="text-gray-500 hover:text-red-500"><FiX size={24}/></button>
+              </div>
+
+              <div className="p-6 overflow-y-auto custom-scrollbar">
+                <table className="w-full text-left border-collapse">
+                  <thead>
+                    <tr className="border-b-2 border-gray-200 dark:border-gray-700 text-xs font-bold text-gray-500 uppercase tracking-wider">
+                      <th className="p-3 w-1/3">Required Field (System)</th>
+                      <th className="p-3 w-1/2">Your Field (From CSV)</th>
+                      <th className="p-3 w-1/6 text-center">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {dbFields.map((field) => (
+                      <tr key={field.key} className="border-b border-gray-100 dark:border-gray-700">
+                        <td className="p-4"><span className={`font-semibold ${field.required ? 'text-gray-900 dark:text-white' : 'text-gray-600 dark:text-gray-400'}`}>{field.label} {field.required && <span className="text-red-500">*</span>}</span></td>
+                        <td className="p-4">
+                          <select 
+                            value={fieldMapping[field.key] || ''} 
+                            onChange={(e) => setFieldMapping({...fieldMapping, [field.key]: e.target.value})}
+                            className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-gray-50 dark:bg-gray-900 text-gray-800 dark:text-gray-200 outline-none focus:border-blue-500 transition"
+                          >
+                            <option value="">-- Ignore this field --</option>
+                            {csvHeaders.map(h => (<option key={h} value={h}>{h}</option>))}
+                          </select>
+                        </td>
+                        <td className="p-4 text-center">
+                          {fieldMapping[field.key] ? (
+                            <div className="inline-flex items-center justify-center w-8 h-8 rounded-full bg-green-100 text-green-600 dark:bg-green-900/30 dark:text-green-400"><FiCheck size={18} strokeWidth={3} /></div>
+                          ) : (
+                            field.required ? <span className="text-xs text-red-500 font-bold">Required</span> : <span className="text-xs text-gray-400">-</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="p-5 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 flex justify-end gap-3">
+                <button onClick={() => setImportStep(0)} className="px-6 py-2.5 rounded-xl font-bold text-gray-600 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:text-gray-300 transition">Cancel</button>
+                <button onClick={proceedToPreview} className="px-8 py-2.5 rounded-xl font-bold text-white bg-blue-600 hover:bg-blue-700 shadow-md transition flex items-center gap-2">Next Step <FiArrowRight/></button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ================= 🟢 EDITABLE PREVIEW MODAL (Step 2) ================= */}
+        {importStep === 2 && (
+          <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 animate-fadeIn">
+            <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl w-full max-w-6xl overflow-hidden flex flex-col max-h-[95vh]">
+              <div className="p-5 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 flex justify-between items-center">
+                <div>
+                  <h2 className="text-lg font-bold text-gray-800 dark:text-white flex items-center gap-2"><FiEdit /> Review & Edit Data before Saving</h2>
+                  <p className="text-sm text-gray-500 mt-1">You can edit names, categories, prices, or stock quantities right here before confirming.</p>
+                </div>
+                <button onClick={() => setImportStep(0)} className="text-gray-500 hover:text-red-500"><FiX size={24}/></button>
+              </div>
+
+              <div className="p-2 overflow-auto custom-scrollbar flex-1 bg-gray-100/50 dark:bg-gray-900/50">
+                <table className="w-full text-left border-collapse min-w-[1000px]">
+                  <thead className="sticky top-0 bg-white dark:bg-gray-800 shadow-sm z-10">
+                    <tr className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">
+                      <th className="p-3 border-b dark:border-gray-700">Item Name *</th>
+                      <th className="p-3 border-b dark:border-gray-700 w-40">Category</th>
+                      <th className="p-3 border-b dark:border-gray-700 w-32">Selling Price *</th>
+                      <th className="p-3 border-b dark:border-gray-700 w-32">Cost Price</th>
+                      <th className="p-3 border-b dark:border-gray-700 w-28">Stock</th>
+                      <th className="p-3 border-b dark:border-gray-700 w-40">Part Number / Barcode</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+                    {previewData.map((item, idx) => (
+                      <tr key={idx} className="bg-white dark:bg-gray-800 hover:bg-blue-50/50 dark:hover:bg-blue-900/10 transition">
+                        <td className="p-2">
+                          <input type="text" value={item.name || ''} onChange={(e) => handlePreviewEdit(idx, 'name', e.target.value)} className="w-full px-3 py-2 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded text-sm font-semibold text-gray-900 dark:text-white outline-none focus:border-blue-500" />
+                        </td>
+                        <td className="p-2">
+                          <input type="text" value={item.category || ''} onChange={(e) => handlePreviewEdit(idx, 'category', e.target.value)} className="w-full px-3 py-2 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded text-sm text-gray-700 dark:text-gray-300 outline-none focus:border-blue-500" placeholder="Uncategorized" />
+                        </td>
+                        <td className="p-2">
+                          <input type="number" value={item.selling_price || ''} onChange={(e) => handlePreviewEdit(idx, 'selling_price', e.target.value)} className="w-full px-3 py-2 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded text-sm font-bold text-blue-600 dark:text-blue-400 outline-none focus:border-blue-500" />
+                        </td>
+                        <td className="p-2">
+                          <input type="number" value={item.cost_price || ''} onChange={(e) => handlePreviewEdit(idx, 'cost_price', e.target.value)} className="w-full px-3 py-2 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded text-sm text-gray-700 dark:text-gray-300 outline-none focus:border-blue-500" />
+                        </td>
+                        <td className="p-2">
+                          <input type="number" value={item.stock_quantity || ''} onChange={(e) => handlePreviewEdit(idx, 'stock_quantity', e.target.value)} className="w-full px-3 py-2 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded text-sm font-bold text-gray-900 dark:text-white outline-none focus:border-blue-500 text-center" />
+                        </td>
+                        <td className="p-2">
+                          <input type="text" value={item.barcode || ''} onChange={(e) => handlePreviewEdit(idx, 'barcode', e.target.value)} className="w-full px-3 py-2 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded text-sm font-mono text-gray-500 dark:text-gray-400 outline-none focus:border-blue-500" placeholder="Leave empty if none" />
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="p-5 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 flex justify-between items-center">
+                <span className="text-sm font-bold text-gray-600 dark:text-gray-400 bg-gray-200 dark:bg-gray-800 px-3 py-1 rounded-full">{previewData.length} items ready to import/update</span>
+                <div className="flex gap-3">
+                  <button onClick={() => setImportStep(1)} className="px-6 py-2.5 rounded-xl font-bold text-gray-600 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:text-gray-300 transition">Back</button>
+                  <button onClick={saveImportToDatabase} disabled={loading} className="px-8 py-2.5 rounded-xl font-bold text-white bg-blue-600 hover:bg-blue-700 shadow-md transition flex items-center gap-2 disabled:opacity-50">
+                    {loading ? <FiRefreshCw className="animate-spin" /> : <FiCheck />} Confirm & Save Import
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         )}

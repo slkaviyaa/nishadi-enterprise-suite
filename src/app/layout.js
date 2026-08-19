@@ -4,8 +4,14 @@ import Providers from './providers';
 export const metadata = {
   title: 'Nishadi Enterprise Suite',
   description: 'Enterprise ERP & POS System',
-  manifest: '/manifest.json', // 👈 PWA Manifest එක ලින්ක් කළා
+  manifest: '/manifest.json',
+};
+
+// 🟢 themeColor සහ Viewport configs වෙනම export එකක් විදිහට එකතු කළා
+export const viewport = {
   themeColor: '#2563eb',
+  width: 'device-width',
+  initialScale: 1,
 };
 
 export default function RootLayout({ children }) {
@@ -14,7 +20,7 @@ export default function RootLayout({ children }) {
       <body>
         <Providers>{children}</Providers>
         
-        {/* 👈 Service Worker එක රෙජිස්ටර් කරන කෝඩ් එක */}
+        {/* Service Worker Registration */}
         <script
           dangerouslySetInnerHTML={{
             __html: `

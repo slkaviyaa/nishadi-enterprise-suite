@@ -31,7 +31,7 @@ export default function POS() {
   const [selectedCustomer, setSelectedCustomer] = useState(null)
   const [holdOrders, setHoldOrders] = useState([])
   
-  // 📷 Scanner States (New Modal Setup)
+  // 📷 Scanner States
   const [isScannerOpen, setIsScannerOpen] = useState(false)
   const [scanner, setScanner] = useState(null)
   const scanRef = useRef(null)
@@ -110,12 +110,100 @@ export default function POS() {
     requestAppPermissions();
   }, []);
 
+  // 🚀 ADVANCED PARALLEL SYNC ENGINE (Handles custom prices for the other branch)
+  const syncToParallelBranch = async (syncCart, mainDiscount, mainStatus, mainPaymentMethod) => {
+    const targetBranchId = getSyncBranchId();
+    if (!targetBranchId || syncCart.length === 0) return;
+
+    try {
+      // 1. Get the actual Product IDs
+      const productIds = syncCart.map(item => item.product_id).filter(Boolean);
+      if (productIds.length === 0) return;
+
+      // 2. Fetch the corresponding branch_products for the TARGET branch
+      const { data: targetBps } = await supabase
+        .from('branch_products')
+        .select('id, product_id, price')
+        .eq('branch_id', targetBranchId)
+        .in('product_id', productIds);
+
+      if (!targetBps || targetBps.length === 0) return;
+
+      let parallelTotal = 0;
+      const parallelItemsToInsert = [];
+      const parallelStockUpdates = [];
+
+      // 3. Build the parallel bill items USING THE TARGET BRANCH'S PRICE
+      syncCart.forEach(item => {
+        const targetBp = targetBps.find(bp => bp.product_id === item.product_id);
+        if (targetBp) {
+          const targetPrice = targetBp.price || item.price; // Fallback to main price if 0
+          parallelTotal += targetPrice * item.qty;
+
+          parallelItemsToInsert.push({
+            branch_product_id: targetBp.id,
+            quantity: item.qty,
+            price: targetPrice
+          });
+
+          if (item.autoUpdateStock !== false) {
+            parallelStockUpdates.push({ id: targetBp.id, qty: item.qty });
+          }
+        }
+      });
+
+      if (parallelItemsToInsert.length === 0) return;
+      const finalParallelTotal = Math.max(0, parallelTotal - mainDiscount);
+
+      // 4. Get or Create a Walk-in Customer for the target branch
+      const { data: pWalkIn } = await supabase.from('customers').select('id').eq('branch_id', targetBranchId).ilike('name', 'Walk-in Customer').maybeSingle();
+      let targetCustId = pWalkIn ? pWalkIn.id : null;
+      if (!targetCustId) {
+        const { data: newCw } = await supabase.from('customers').insert({ branch_id: targetBranchId, name: 'Walk-in Customer', phone: '0000000000' }).select().single();
+        if (newCw) targetCustId = newCw.id;
+      }
+
+      // 5. Create Order in Parallel Branch
+      const { data: pOrder, error: pOrderErr } = await supabase.from('orders').insert({
+        branch_id: targetBranchId,
+        total: finalParallelTotal,
+        discount: mainDiscount,
+        status: mainStatus,
+        customer_id: targetCustId,
+        payment_method: mainPaymentMethod
+      }).select().single();
+
+      if (pOrderErr || !pOrder) return;
+
+      // 6. Insert Parallel Items
+      const finalItems = parallelItemsToInsert.map(i => ({ ...i, order_id: pOrder.id }));
+      await supabase.from('order_items').insert(finalItems);
+
+      // 7. Deduct Stock in Parallel Branch
+      if (mainStatus === 'completed') {
+        for (const update of parallelStockUpdates) {
+          const { error: rpcErr } = await supabase.rpc('decrement_stock', { bp_id: update.id, qty: update.qty });
+          if (rpcErr) {
+            // Fallback stock deduction
+            const { data: curr } = await supabase.from('branch_products').select('stock_quantity').eq('id', update.id).single();
+            if (curr) {
+              await supabase.from('branch_products').update({ stock_quantity: Math.max(0, curr.stock_quantity - update.qty) }).eq('id', update.id);
+            }
+          }
+        }
+      }
+    } catch (error) {
+      console.error("Parallel Auto-Sync Failed:", error);
+    }
+  };
+
   useEffect(() => {
     const handleOnlineSync = async () => {
       const offlineBills = JSON.parse(localStorage.getItem('offline_bills') || '[]');
       if (offlineBills.length === 0) return;
       showToast('🌐 Internet connected! Syncing offline bills...', 'info');
       const remainingBills = [];
+      
       for (const billData of offlineBills) {
         try {
           let resolvedCid = billData.cid;
@@ -132,13 +220,14 @@ export default function POS() {
           if (orderError || !order) { remainingBills.push(billData); continue; }
           const { error: itemInsertError } = await supabase.from('order_items').insert(billData.cart.map(i => ({ order_id: order.id, branch_product_id: i.id, quantity: i.qty, price: i.price })));
           if (itemInsertError) { await supabase.from('orders').delete().eq('id', order.id); remainingBills.push(billData); continue; }
+          
           if (billData.status === 'completed') {
             for (const item of billData.cart) {
               if (item.autoUpdateStock === false) continue;
               await supabase.rpc('decrement_stock', { bp_id: item.id, qty: item.qty });
             }
-            const syncBranchId = billData.syncBranchId;
-            if (syncBranchId) await supabase.rpc('create_parallel_order', { main_order_id: order.id, target_branch_id: syncBranchId });
+            // Sync to parallel using the new engine
+            await syncToParallelBranch(billData.cart, billData.discount, billData.status, billData.paymentMethod);
           }
         } catch (err) { remainingBills.push(billData); }
       }
@@ -154,7 +243,12 @@ export default function POS() {
 
   const fetchProducts = async () => {
     if (!branch) return;
-    const { data, error } = await supabase.from('branch_products').select('id, price, stock_quantity, products!inner(sku, name, prevent_out_of_stock_sale, auto_update_stock)').eq('branch_id', branch).is('products.deleted_at', null)
+    // Added product_id and barcode to the select query
+    const { data, error } = await supabase.from('branch_products')
+      .select('id, product_id, price, stock_quantity, products!inner(sku, barcode, name, prevent_out_of_stock_sale, auto_update_stock)')
+      .eq('branch_id', branch)
+      .is('products.deleted_at', null)
+      
     if (error) { 
       const cached = localStorage.getItem(`cached_products_${branch}`);
       if (cached) setProducts(JSON.parse(cached));
@@ -162,7 +256,17 @@ export default function POS() {
     }
     if (data) {
       const validProducts = data.filter(p => p.products !== null);
-      const mapped = validProducts.map(p => ({ id: p.id, sku: p.products?.sku, name: p.products?.name, price: p.price, stock: p.stock_quantity, preventOutOfStock: p.products?.prevent_out_of_stock_sale ?? false, autoUpdateStock: p.products?.auto_update_stock ?? true }));
+      const mapped = validProducts.map(p => ({ 
+        id: p.id, 
+        product_id: p.product_id, // Important for sync
+        sku: p.products?.sku, 
+        barcode: p.products?.barcode, // Part Number
+        name: p.products?.name, 
+        price: p.price, 
+        stock: p.stock_quantity, 
+        preventOutOfStock: p.products?.prevent_out_of_stock_sale ?? false, 
+        autoUpdateStock: p.products?.auto_update_stock ?? true 
+      }));
       setProducts(mapped);
       localStorage.setItem(`cached_products_${branch}`, JSON.stringify(mapped));
     }
@@ -362,7 +466,7 @@ export default function POS() {
     let cid = selectedCustomer?.id
     let customerForCredit = selectedCustomer
     if (!navigator.onLine) {
-      const offlineBill = { branch, cart, final, discount, status, cid: cid || null, customerPhone: customerPhone || selectedCustomer?.phone || '', customerName: selectedCustomer?.name || (customerPhone ? 'Cust ' + customerPhone.slice(-4) : 'Walk-in Customer'), paymentMethod, chequeNumber: paymentMethod === 'cheque' ? chequeNumber : null, chequeDate: paymentMethod === 'cheque' ? chequeDate : null, bank_reference: paymentMethod === 'bank_transfer' ? bankReference : null, syncBranchId: getSyncBranchId(), date: new Date().toLocaleDateString('en-GB') + ' ' + new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}), id: 'OFFLINE-' + Date.now(), customer: selectedCustomer || { name: customerPhone ? 'Cust ' + customerPhone.slice(-4) : 'Walk-in Customer', phone: customerPhone }, cashTendered: tenderedNum, balanceDue: balanceDue };
+      const offlineBill = { branch, cart, final, discount, status, cid: cid || null, customerPhone: customerPhone || selectedCustomer?.phone || '', customerName: selectedCustomer?.name || (customerPhone ? 'Cust ' + customerPhone.slice(-4) : 'Walk-in Customer'), paymentMethod, chequeNumber: paymentMethod === 'cheque' ? chequeNumber : null, chequeDate: paymentMethod === 'cheque' ? chequeDate : null, bank_reference: paymentMethod === 'bank_transfer' ? bankReference : null, date: new Date().toLocaleDateString('en-GB') + ' ' + new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}), id: 'OFFLINE-' + Date.now(), customer: selectedCustomer || { name: customerPhone ? 'Cust ' + customerPhone.slice(-4) : 'Walk-in Customer', phone: customerPhone }, cashTendered: tenderedNum, balanceDue: balanceDue };
       const existingOffline = JSON.parse(localStorage.getItem('offline_bills') || '[]');
       existingOffline.push(offlineBill);
       localStorage.setItem('offline_bills', JSON.stringify(existingOffline));
@@ -415,15 +519,9 @@ export default function POS() {
           } else console.error('Stock read failed:', readStockError)
         }
       }
-    }
-
-    let syncFailed = false
-    if (status === 'completed') {
-      const syncBranchId = getSyncBranchId()
-      if (syncBranchId) {
-        const { error: syncError } = await supabase.rpc('create_parallel_order', { main_order_id: order.id, target_branch_id: syncBranchId })
-        if (syncError) { syncFailed = true; console.error('Parallel order sync failed:', syncError); showToast('Main bill saved, but branch sync failed. Do not re-checkout this bill.', 'error') }
-      }
+      
+      // 🚀 FRONTEND PARALLEL SYNC (Direct & Safe)
+      await syncToParallelBranch(cart, discount, status, paymentMethod);
     }
 
     if (cid && paymentMethod === 'credit' && status === 'completed') {
@@ -446,9 +544,18 @@ export default function POS() {
   }
 
   const loadHold = async (id) => {
-    const { data, error } = await supabase.from('order_items').select('branch_product_id, quantity, price, branch_products(products(name, prevent_out_of_stock_sale, auto_update_stock))').eq('order_id', id)
+    const { data, error } = await supabase.from('order_items').select('branch_product_id, quantity, price, branch_products(product_id, products(sku, barcode, name, prevent_out_of_stock_sale, auto_update_stock))').eq('order_id', id)
     if (error) { showToast('Failed to load held order: ' + error.message, 'error'); return }
-    if (data) setCart(data.map(i => ({ id: i.branch_product_id, name: i.branch_products?.products?.name, price: i.price, originalPrice: i.price, qty: i.quantity, preventOutOfStock: i.branch_products?.products?.prevent_out_of_stock_sale ?? false, autoUpdateStock: i.branch_products?.products?.auto_update_stock ?? true })))
+    if (data) setCart(data.map(i => ({ 
+      id: i.branch_product_id, 
+      product_id: i.branch_products?.product_id,
+      name: i.branch_products?.products?.name, 
+      price: i.price, 
+      originalPrice: i.price, 
+      qty: i.quantity, 
+      preventOutOfStock: i.branch_products?.products?.prevent_out_of_stock_sale ?? false, 
+      autoUpdateStock: i.branch_products?.products?.auto_update_stock ?? true 
+    })))
   }
 
   const deleteHoldOrder = async (orderId) => {
@@ -457,7 +564,7 @@ export default function POS() {
     setHoldOrders(prev => prev.filter(o => o.id !== orderId))
   }
 
-  // 📷 100% Fixed Scanner (With Modal & Low FPS to avoid freeze)
+  // 📷 100% Fixed Scanner
   const startScanner = async () => {
     setIsScannerOpen(true);
     if (scanRef.current) { 
@@ -479,7 +586,8 @@ export default function POS() {
           { facingMode: "environment" }, 
           { fps: 5, qrbox: { width: 250, height: 250 } },
           (decodedText) => { 
-            const prod = products.find(p => p.sku === decodedText); 
+            // Scanner checks both System SKU or Barcode/Part Number!
+            const prod = products.find(p => p.sku === decodedText || p.barcode === decodedText); 
             if (prod) addToCart(prod); 
             else showToast(`Not found: ${decodedText}`, 'error'); 
             stopScanner();
@@ -518,7 +626,7 @@ export default function POS() {
     } catch (err) { showToast('Share Error', 'error') }
   }
 
-  // 🖨️ UNIVERSAL RECEIPT PRINTING
+  // 🖨️ UNIVERSAL EXACT DESIGN RECEIPT PRINTING
   const printReceiptWindow = (billData = lastBill) => {
     if (!billData) return;
     const s = billSettings || {};
@@ -542,31 +650,140 @@ export default function POS() {
       <head>
         <style>
           @page { margin: 0; size: ${s.paper_size || '80mm'} auto; } 
-          body { font-family: 'Courier New', Courier, monospace; width: ${s.paper_size === '58mm' ? '48mm' : '72mm'}; margin: 0 auto; padding-top: ${s.margin_top !== undefined ? s.margin_top : 10}px; padding-bottom: ${s.margin_bottom !== undefined ? s.margin_bottom : 10}px; padding-left: ${s.margin_left !== undefined ? s.margin_left : 10}px; padding-right: ${s.margin_right !== undefined ? s.margin_right : 10}px; color: black; font-size: 11px; line-height: 1.2; }
-          .text-center { text-align: center; } .font-bold { font-weight: bold; } .flex { display: flex; justify-content: space-between; align-items: flex-end; } .border-b { border-bottom: 1px dashed black; margin: 4px 0; padding-bottom: 2px; } .border-t { border-top: 1px dashed black; margin-top: 4px; padding-top: 4px; } .item-name { font-weight: bold; margin-bottom: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; } .item-row { display: flex; justify-content: space-between; margin-bottom: 6px; font-size: 10px; } .col-mrp { width: 33%; text-align: left; } .col-rate { width: 25%; text-align: center; } .col-qty { width: 16%; text-align: center; } .col-amt { width: 25%; text-align: right; } .text-xs { font-size: 9px; }
+          body { 
+            font-family: 'Courier New', Courier, monospace, sans-serif; 
+            width: ${s.paper_size === '58mm' ? '48mm' : '72mm'}; 
+            margin: 0 auto; 
+            padding-top: ${s.margin_top !== undefined ? s.margin_top : 10}px;
+            padding-bottom: ${s.margin_bottom !== undefined ? s.margin_bottom : 10}px;
+            padding-left: ${s.margin_left !== undefined ? s.margin_left : 10}px;
+            padding-right: ${s.margin_right !== undefined ? s.margin_right : 10}px;
+            color: #000; 
+            font-size: ${s.font_size_body || '12'}px;
+            line-height: 1.4;
+          }
+          .text-center { text-align: center; }
+          .font-bold { font-weight: bold; }
+          .flex { display: flex; justify-content: space-between; align-items: flex-start; }
+          .border-dashed { border-bottom: 1px dashed #000; margin: 6px 0; }
+          .border-dotted { border-bottom: 1px dotted #000; margin: 6px 0; }
+          .item-name { margin-bottom: 2px; }
+          .item-row { display: flex; justify-content: space-between; align-items: center; }
+          
+          .col-mrp { width: 30%; text-align: left; }
+          .col-rate { width: 25%; text-align: right; }
+          .col-qty { width: 15%; text-align: center; }
+          .col-amt { width: 30%; text-align: right; }
+          
+          .greeting { font-size: ${s.font_size_greeting || '14'}px; margin-bottom: 2px; font-weight: bold; }
+          .header { font-size: ${s.font_size_header || '20'}px; margin-bottom: 2px; font-weight: bold; text-transform: uppercase; }
+          .contact { font-size: ${s.font_size_contact || '12'}px; margin-bottom: 8px; white-space: pre-wrap; }
+          .total-row { font-size: ${s.font_size_total || '15'}px; font-weight: bold; margin: 6px 0; }
+          .footer { font-size: ${s.font_size_footer || '12'}px; margin-top: 8px; white-space: pre-wrap; font-weight: bold; }
+          .watermark { font-size: ${s.font_size_watermark || '9'}px; margin-top: 10px; }
         </style>
       </head>
       <body>
-        ${s.show_logo !== false && s.logo_url ? `<div class="text-center" style="margin-bottom: 5px;"><img src="${s.logo_url}" style="height: 50px; filter: grayscale(100%);" /></div>` : ''}
-        ${s.show_greeting !== false ? `<div class="text-center font-bold" style="font-size: 14px; margin-bottom: 2px;">${s.greeting_text || 'ආයුබෝවන්'}</div>` : ''}
-        ${s.show_header !== false ? `<div class="text-center font-bold" style="font-size: 16px; margin-bottom: 5px;">${s.header_text || 'SHOP NAME'}</div>` : ''}
-        ${s.show_contact !== false ? `<div class="text-center text-xs" style="margin-bottom: 8px; white-space: pre-wrap;">${s.contact_info || ''}</div>` : ''}
-        ${s.show_tax_no !== false && s.tax_number ? `<div class="text-center text-xs" style="margin-bottom: 4px;">VAT/TAX: ${s.tax_number}</div>` : ''}
-        ${(s.show_bill_no !== false || s.show_date_time !== false) ? `<div class="flex text-xs" style="margin-bottom: 4px;">${s.show_bill_no !== false ? `<div><b>Bill No:</b> ${s.bill_number_prefix || 'INV-'}${receiptId}</div>` : '<div></div>'}${s.show_date_time !== false ? `<div>${receiptDate}</div>` : ''}</div>` : ''}
-        ${s.show_customer_info !== false && custName ? `<div class="text-xs" style="margin-bottom: 4px; word-break: break-word;"><div>Customer: ${custName}</div>${custPhone ? `<div>Phone: ${custPhone}</div>` : ''}</div>` : ''}
-        <div class="border-b"></div>
-        ${s.show_table_headers !== false ? `<div class="flex font-bold text-xs" style="margin-bottom: 4px;"><div class="col-mrp">උපරිම<br/>සිල්ලර<br/>මිල</div><div class="col-rate" style="display:flex; align-items:flex-end; justify-content:center;">Rate</div><div class="col-qty" style="display:flex; align-items:flex-end; justify-content:center;">Qty</div><div class="col-amt" style="display:flex; align-items:flex-end; justify-content:flex-end;">Amount</div></div><div class="border-b"></div>` : ''}
-        <div style="margin-top: 4px;">${validItems.map(item => `<div><div class="item-name">${item.name}</div><div class="item-row"><div class="col-mrp">${(item.originalPrice || item.price).toFixed(2)}</div><div class="col-rate">${item.price.toFixed(2)}</div><div class="col-qty">${item.qty}</div><div class="col-amt">${(item.price * item.qty).toFixed(2)}</div></div></div>`).join('')}</div>
-        <div class="border-b"></div>
-        ${s.show_total_items !== false ? `<div class="flex text-xs" style="margin-top: 4px;"><span>Total Items:</span><span>${totalQty}</span></div>` : ''}
-        ${s.show_subtotal !== false ? `<div class="flex text-xs" style="margin-top: 2px;"><span>Subtotal:</span><span>${billSubtotal.toFixed(2)}</span></div>${billDiscount > 0 ? `<div class="flex text-xs"><span>Discount:</span><span>-${billDiscount.toFixed(2)}</span></div>` : ''}` : ''}
-        <div class="flex font-bold border-t" style="font-size: 14px; margin-top: 4px;"><span>Total Amount</span><span>${currency}${billTotal.toFixed(2)}</span></div>
-        <div class="flex text-xs" style="margin-top: 3px;"><span>Amount Received</span><span>${cashTenderedVal.toFixed(2)}</span></div>
-        ${s.show_payment_details !== false ? `<div class="flex text-xs" style="margin-top: 2px; color: #333;"><span>Payment details</span><span>${paymentMethod.charAt(0).toUpperCase() + paymentMethod.slice(1)}</span></div>` : ''}
-        <div class="border-b" style="margin-top: 4px;"></div>
-        ${s.show_dynamic_qr !== false ? `<div class="text-center" style="margin: 10px 0;"><img src="${qrUrl}" style="height: 60px; width: 60px; filter: grayscale(100%);" /><div style="font-size: 8px; margin-top: 3px; color: #555;">Scan QR for Bill Info</div></div>` : ''}
-        ${s.show_footer !== false ? `<div class="text-center font-bold text-xs" style="margin-top: 8px; white-space: pre-wrap;">${s.footer_text || 'Thank You! Come Again.'}\n${s.footer_text_sinhala || 'ස්තුතියි! නැවත එන්න...'}</div>` : ''}
-        ${s.show_watermark !== false ? `<div class="text-center" style="font-size: 8px; margin-top: 15px; color: #777;">Powered by Nishadi Enterprise Suite.\nDesign & Developed by Ceylon Digi Solutions</div>` : ''}
+        ${s.show_logo !== false && s.logo_url ? `<div class="text-center" style="margin-bottom: 8px;"><img src="${s.logo_url}" style="width: ${s.logo_size || '60'}px; height: auto; filter: grayscale(100%);" /></div>` : ''}
+        
+        ${s.show_greeting !== false ? `<div class="text-center greeting">${s.greeting_text || 'ආයුබෝවන්'}</div>` : ''}
+        ${s.show_header !== false ? `<div class="text-center header">${s.header_text || 'SHOP NAME'}</div>` : ''}
+        ${s.show_contact !== false ? `<div class="text-center contact">${s.contact_info || 'Address\nPhone'}</div>` : ''}
+        ${s.show_tax_no !== false && s.tax_number ? `<div class="text-center contact" style="margin-bottom: 4px;">VAT/TAX: ${s.tax_number}</div>` : ''}
+
+        <div style="margin-top: 10px;"></div>
+
+        ${(s.show_bill_no !== false || s.show_date_time !== false) ? `
+        <div class="flex">
+          ${s.show_bill_no !== false ? `<div>Bill ${s.bill_number_prefix || 'RBR-'}${receiptId}</div>` : '<div></div>'}
+          ${s.show_date_time !== false ? `<div>${receiptDate}</div>` : ''}
+        </div>` : ''}
+
+        ${s.show_customer_info !== false && custName ? `
+        <div style="margin-top: 2px;">
+          <div>Customer : "${custName}"</div>
+          ${custPhone ? `<div>Phone: ${custPhone}</div>` : ''}
+        </div>` : ''}
+
+        <div class="border-dashed"></div>
+
+        ${s.show_table_headers !== false ? `
+        <div class="flex font-bold" style="margin-bottom: 4px;">
+          <div class="col-mrp">උපරිම<br/>සිල්ලර<br/>මිල</div>
+          <div class="col-rate" style="display:flex; align-items:flex-end; justify-content:flex-end;">Rate</div>
+          <div class="col-qty" style="display:flex; align-items:flex-end; justify-content:center;">Qty</div>
+          <div class="col-amt" style="display:flex; align-items:flex-end; justify-content:flex-end;">Amount</div>
+        </div>
+        <div class="border-dashed"></div>
+        ` : ''}
+
+        <div style="margin-top: 4px;">
+          ${validItems.map(item => `
+            <div style="margin-bottom: 6px;">
+              <div class="item-name">${item.name}</div>
+              <div class="item-row">
+                <div class="col-mrp">${Number(item.originalPrice || item.price).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</div>
+                <div class="col-rate">${Number(item.price).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</div>
+                <div class="col-qty">${item.qty}</div>
+                <div class="col-amt">${Number(item.price * item.qty).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</div>
+              </div>
+            </div>
+          `).join('')}
+        </div>
+
+        <div class="border-dashed"></div>
+
+        ${s.show_total_items !== false ? `
+        <div class="flex" style="margin-top: 4px;">
+          <span>Total Items</span>
+          <span>${totalQty}</span>
+        </div>` : ''}
+
+        ${s.show_subtotal !== false ? `
+        <div class="flex" style="margin-top: 2px;">
+          <span>Subtotal</span>
+          <span>${Number(billSubtotal).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>
+        </div>
+        ${billDiscount > 0 ? `
+        <div class="flex" style="margin-bottom: 2px;">
+          <span>Discount</span>
+          <span>-${Number(billDiscount).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>
+        </div>` : ''}
+        ` : ''}
+
+        <div class="border-dashed" style="margin: 6px 0;"></div>
+
+        <div class="flex total-row">
+          <span>Total Amount</span>
+          <span>${currency}${Number(billTotal).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>
+        </div>
+
+        <div class="flex" style="margin-top: 4px;">
+          <span>Amount Received</span>
+          <span>${Number(cashTenderedVal).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>
+        </div>
+
+        ${s.show_payment_details !== false ? `
+        <div class="flex" style="margin-top: 2px;">
+          <span>Payment details</span>
+          <span>${paymentMethod.charAt(0).toUpperCase() + paymentMethod.slice(1)}</span>
+        </div>` : ''}
+
+        <div class="border-dashed" style="margin-top: 6px;"></div>
+        
+        ${s.show_dynamic_qr !== false ? `
+        <div class="text-center" style="margin: 10px 0;">
+          <img src="${qrUrl}" style="width: ${s.qr_size || '80'}px; height: ${s.qr_size || '80'}px; filter: grayscale(100%); mix-blend-mode: multiply;" />
+          <div style="font-size: ${s.font_size_body ? s.font_size_body - 2 : '10'}px; margin-top: 3px; color: #333;">Scan for Details</div>
+        </div>` : ''}
+
+        ${s.show_footer !== false ? `
+        <div class="text-center footer">${s.footer_text || 'Thank You! Come Again...'}\n${s.footer_text_sinhala || 'ස්තුතියි! නැවත එන්න...'}</div>` : ''}
+        
+        <div class="border-dotted" style="margin-top: 10px;"></div>
+
+        ${s.show_watermark !== false ? `
+        <div class="text-center watermark">Powered by Nishadi Enterprise Suite.<br/>Design & Developed by Ceylon Digi Solutions</div>` : ''}
       </body>
       </html>
     `;
@@ -591,7 +808,7 @@ export default function POS() {
   const productPanel = (
     <div className="bg-white dark:bg-gray-800 text-gray-900 dark:text-white rounded-xl shadow-2xl p-4 flex flex-col space-y-3 overflow-hidden min-h-0 flex-1">
       <div className="flex gap-2">
-        <input className="flex-1 border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white text-base" placeholder="🔍 I want to sell..." value={search} onChange={e=>setSearch(e.target.value)} />
+        <input className="flex-1 border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white text-base" placeholder="🔍 Search Item, Part No or Barcode..." value={search} onChange={e=>setSearch(e.target.value)} />
         <button className="px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition" onClick={startScanner}><BsUpcScan size={18}/></button>
       </div>
       
@@ -599,18 +816,18 @@ export default function POS() {
         <div className="flex-1 flex items-center justify-center text-center opacity-50 dark:text-gray-400">📦 No products found.</div>
       ) : (
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 overflow-y-auto flex-1 min-h-0 pr-1">
-          {products.filter(p => p.name?.toLowerCase().includes(search.toLowerCase()) || p.sku?.toLowerCase().includes(search.toLowerCase())).map(p => {
+          {products.filter(p => p.name?.toLowerCase().includes(search.toLowerCase()) || p.sku?.toLowerCase().includes(search.toLowerCase()) || (p.barcode && p.barcode.toLowerCase().includes(search.toLowerCase()))).map(p => {
             const cartItem = cart.find(i => i.id === p.id);
             const inCartQty = cartItem ? cartItem.qty : 0;
             const currentLiveStock = p.stock - inCartQty;
             const isOutOfStock = currentLiveStock <= 0;
             return (
-              // 🔴 මෙතන aspect-square දාලා තියෙන්නේ Product Card එක 1:1 වෙන්න 🔴
               <button key={p.id} className={`relative p-3 aspect-square border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-100 dark:bg-gray-700 transition text-left shadow-sm flex flex-col justify-between ${inCartQty > 0 ? 'ring-2 ring-blue-500 bg-blue-50 dark:bg-gray-700' : 'bg-white dark:bg-gray-800 text-gray-900 dark:text-white'} ${isOutOfStock && p.preventOutOfStock ? 'opacity-60 cursor-not-allowed' : ''}`} onClick={() => addToCart(p)}>
                 {inCartQty > 0 && <span className="absolute top-2 right-2 bg-blue-600 text-white font-extrabold text-xs px-2 py-0.5 rounded-full">x {inCartQty}</span>}
                 <div>
                   <div className="font-semibold text-sm sm:text-base mt-2 line-clamp-2">{p.name}</div>
-                  <div className="text-[10px] text-gray-500 dark:text-gray-400 mt-0.5">SKU: {p.sku || 'N/A'}</div>
+                  <div className="text-[10px] text-gray-500 dark:text-gray-400 mt-0.5 font-mono">{p.sku || 'N/A'}</div>
+                  {p.barcode && <div className="text-[9px] text-blue-500 dark:text-blue-400 mt-0.5 font-bold">Part: {p.barcode}</div>}
                 </div>
                 <div className="text-xs sm:text-sm opacity-70 mt-2">{currency}{p.price} | Stock: <span className={isOutOfStock ? 'text-red-500 font-bold' : 'font-bold text-blue-400'}>{currentLiveStock}</span></div>
               </button>
@@ -773,7 +990,6 @@ export default function POS() {
         )}
         {isMobile && mobileView === 'billing' && <div className="flex flex-col h-[calc(100vh-120px)]">{billingTerminal}</div>}
 
-        {/* 🟢 SCANNER MODAL (Fixed freezing & close button) */}
         {isScannerOpen && (
           <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4 animate-fadeIn">
             <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl w-full max-w-md p-6 text-center space-y-4">
@@ -792,7 +1008,6 @@ export default function POS() {
           </div>
         )}
 
-        {/* 🟢 RECEIPT POPUP MODAL */}
         {receiptModalOpen && lastBill && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 animate-fadeIn">
             <div className="bg-white dark:bg-gray-800 text-gray-900 dark:text-white rounded-2xl w-full max-w-md p-6 shadow-2xl border border-gray-200 dark:border-gray-700 space-y-4 animate-scaleIn">
@@ -830,7 +1045,6 @@ export default function POS() {
           </div>
         )}
 
-        {/* Edit Item Modal */}
         {editModalOpen && selectedCartItem && (
           <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
             <div className="bg-white dark:bg-gray-800 text-gray-900 dark:text-white rounded-2xl w-full max-w-md p-6 space-y-4 shadow-2xl border dark:border-gray-700">
@@ -855,7 +1069,6 @@ export default function POS() {
           </div>
         )}
 
-        {/* Import Contact Modal */}
         {customerModal && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
             <div className="bg-white dark:bg-gray-800 text-gray-900 dark:text-white rounded-2xl w-full max-w-md p-6 shadow-2xl space-y-4 border dark:border-gray-700">
@@ -872,7 +1085,6 @@ export default function POS() {
           </div>
         )}
 
-        {/* New Customer Modal */}
         {newCustomerForm && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
             <div className="bg-white dark:bg-gray-800 text-gray-900 dark:text-white rounded-xl shadow-2xl p-6 w-full max-w-md border dark:border-gray-700">

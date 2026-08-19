@@ -4,6 +4,7 @@ import { useAuth } from '../context/AuthContext'
 import { useSettings } from '../context/SettingsContext'
 import { supabase } from '../lib/supabaseClient'
 import { useRouter } from 'next/navigation'
+import { BRANCHES } from '../lib/branches'
 import {
   FiHome, FiPackage, FiUsers, FiBarChart2, FiUserCheck, FiShoppingCart,
   FiLogOut, FiUserPlus, FiSettings, FiGrid, FiToggleLeft,
@@ -12,7 +13,7 @@ import {
 } from 'react-icons/fi'
 
 export default function Sidebar({ onClose }) {
-  const { user } = useAuth()
+  const { user, branch } = useAuth()
   const { settings } = useSettings()
   const router = useRouter()
   const appVersion = 'v1.0.0'
@@ -24,7 +25,7 @@ export default function Sidebar({ onClose }) {
   // Common modules
   if (settings?.pos_enabled !== false) menu.push({ href: '/pos', label: 'POS Terminal', icon: <FiHome /> })
   
-  // 💳 Bill Payments Module (Added right below POS / Inventory for quick cashier access)
+  // 💳 Bill Payments Module
   menu.push({ href: '/payments', label: 'Bill Payments', icon: <FiCreditCard /> })
 
   if (settings?.inventory_enabled !== false) menu.push({ href: '/inventory', label: 'Inventory', icon: <FiPackage /> })
@@ -32,17 +33,20 @@ export default function Sidebar({ onClose }) {
   if (settings?.reports_enabled !== false) menu.push({ href: '/reports', label: 'Reports', icon: <FiBarChart2 /> })
   if (settings?.staff_enabled !== false) menu.push({ href: '/staff', label: 'Staff & Expenses', icon: <FiUserCheck /> })
   
-  // Attendance Module for all staff & owners
+  // Attendance Module
   menu.push({ href: '/attendance', label: 'Attendance & Duty', icon: <FiClock /> })
 
   if (settings?.shop_enabled !== false) menu.push({ href: '/shop', label: 'ShopFront', icon: <FiShoppingCart /> })
 
   // Owner-only modules
   if (user?.role === 'owner') {
-    if (settings?.users_enabled !== false) menu.push({ href: '/users', label: 'Users', icon: <FiUserPlus /> })
+    // 🔴 Parallel Branch එකේදී Users menu item එක සම්පූර්ණයෙන්ම Hide කිරීම
+    if (settings?.users_enabled !== false && branch !== BRANCHES.PARALLEL) {
+      menu.push({ href: '/users', label: 'Users', icon: <FiUserPlus /> })
+    }
+    
     if (settings?.bill_settings_enabled !== false) menu.push({ href: '/bill-settings', label: 'Bill Settings', icon: <FiSettings /> })
     menu.push({ href: '/discounts', label: 'Discounts', icon: <FiPercent /> })
-    // Stock Transfer removed from here
     menu.push({ href: '/quotations', label: 'Quotations', icon: <FiFileText /> })
     menu.push({ href: '/cash-ledger', label: 'Cash Ledger', icon: <FiDollarSign /> })
     menu.push({ href: '/purchase-orders', label: 'Purchase Orders', icon: <FiTruck /> })

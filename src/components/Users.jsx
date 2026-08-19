@@ -13,7 +13,7 @@ const ALL_PERMISSIONS = [
 ]
 
 export default function Users() {
-  const { user } = useAuth()
+  const { user, branch } = useAuth()
   const { showToast } = useToast()
   const [users, setUsers] = useState([])
   
@@ -27,7 +27,11 @@ export default function Users() {
   const [editUser, setEditUser] = useState(null)
   const [showCreate, setShowCreate] = useState(false)
 
-  useEffect(() => { loadUsers() }, [])
+  useEffect(() => { 
+    if (branch !== BRANCHES.PARALLEL) {
+      loadUsers() 
+    }
+  }, [branch])
 
   const loadUsers = async () => {
     const { data, error } = await supabase.from('staff').select('*')
@@ -132,7 +136,22 @@ export default function Users() {
     }
   }
 
-  if (user?.role !== 'owner') return <div className="alert alert-error">Access Denied</div>
+  // 🔴 Parallel Branch Guard (Owner ට වුණත් Page එක Block කිරීම)
+  if (branch === BRANCHES.PARALLEL) {
+    return (
+      <div className="p-8 text-center bg-white dark:bg-gray-800 rounded-2xl shadow-lg border border-red-200 dark:border-red-900 max-w-lg mx-auto mt-10">
+        <div className="text-4xl mb-3">🔒</div>
+        <h3 className="text-xl font-extrabold text-red-600 dark:text-red-400 mb-2">
+          Access Restricted for Parallel Branch
+        </h3>
+        <p className="text-sm text-gray-600 dark:text-gray-400">
+          Parallel branch එකෙන් Users ලා කළමනාකරණය කිරීමට අවසර නැත. Users ලා එකතු කිරීම Main Branch එකෙන් පමණක් සිදු කළ හැක.
+        </p>
+      </div>
+    )
+  }
+
+  if (user?.role !== 'owner') return <div className="p-8 text-center text-red-500 font-bold">Access Denied</div>
 
   return (
     <div className="space-y-6 text-gray-900 dark:text-white pb-10">

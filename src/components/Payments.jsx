@@ -8,9 +8,8 @@ import PageTemplate from './PageTemplate'
 import { 
   FiSearch, FiMaximize, FiUser, FiFileText, FiPhone, FiDollarSign, FiCheckCircle, FiClock, FiX, FiCamera, FiPrinter
 } from 'react-icons/fi'
-import { Html5Qrcode } from 'html5-qrcode' // 👈 අලුතින් Import කළා
+import { Html5Qrcode } from 'html5-qrcode' 
 
-// 🚀 Capacitor & Bluetooth Utility Imports
 import { Capacitor } from '@capacitor/core';
 import { printNativeBluetooth } from '../utils/printerUtils';
 
@@ -31,7 +30,6 @@ export default function Payments() {
   const [billTotalInput, setBillTotalInput] = useState('') 
   const [isModalOpen, setIsModalOpen] = useState(false)
   
-  // 👈 Scanner සඳහා States සහ Refs
   const [isScannerOpen, setIsScannerOpen] = useState(false)
   const [scanner, setScanner] = useState(null)
   const scanRef = useRef(null)
@@ -87,7 +85,6 @@ export default function Payments() {
       if (bSettings) setBillSettings(bSettings)
 
     } catch (err) {
-      console.error("Error loading bills:", err.message || err)
       showToast('Error loading bills data', 'error')
     } finally {
       setLoading(false)
@@ -125,7 +122,6 @@ export default function Payments() {
     setIsModalOpen(true)
   }
 
-  // 📷 Scanner සදහා අවශ්‍ය Functions
   const startScanner = async () => {
     setIsScannerOpen(true)
     if (scanRef.current) { 
@@ -133,7 +129,6 @@ export default function Payments() {
       scanRef.current = null 
     }
 
-    // Modal එක රෙන්ඩර් වෙනකම් පොඩි ඩේජ් එකක් දීලා කැමරාව ලෝඩ් කිරීම
     setTimeout(async () => {
       try {
         if (typeof navigator !== 'undefined' && navigator?.mediaDevices?.getUserMedia) {
@@ -168,7 +163,7 @@ export default function Payments() {
     setIsScannerOpen(false)
   }
 
-  // 🖨️ UNIVERSAL RECEIPT PRINTING FOR PAYMENTS
+  // 🖨️ EXACT DESIGN RECEIPT PRINTING FOR PAYMENTS
   const printPaymentReceipt = (bill, paidNow, finalTotal) => {
     const s = billSettings || {};
     const receiptNo = 'PR-' + Date.now().toString().slice(-6);
@@ -183,62 +178,94 @@ export default function Payments() {
         <style>
           @page { margin: 0; size: ${s.paper_size || '80mm'} auto; } 
           body { 
-            font-family: 'Courier New', Courier, monospace; 
+            font-family: 'Courier New', Courier, monospace, sans-serif; 
             width: ${s.paper_size === '58mm' ? '48mm' : '72mm'}; 
             margin: 0 auto; 
             padding-top: ${s.margin_top !== undefined ? s.margin_top : 10}px;
             padding-bottom: ${s.margin_bottom !== undefined ? s.margin_bottom : 10}px;
             padding-left: ${s.margin_left !== undefined ? s.margin_left : 10}px;
             padding-right: ${s.margin_right !== undefined ? s.margin_right : 10}px;
-            color: black; 
-            font-size: 11px;
-            line-height: 1.2;
+            color: #000; 
+            font-size: ${s.font_size_body || '12'}px;
+            line-height: 1.4;
           }
           .text-center { text-align: center; }
           .font-bold { font-weight: bold; }
-          .flex { display: flex; justify-content: space-between; align-items: flex-end; }
-          .border-b { border-bottom: 1px dashed black; margin: 4px 0; padding-bottom: 2px; }
-          .text-xs { font-size: 9px; }
-          .receipt-title { font-size: 14px; font-weight: bold; margin: 8px 0; background: #000; color: #fff; padding: 3px; text-align: center; }
+          .flex { display: flex; justify-content: space-between; align-items: flex-start; }
+          .border-dashed { border-bottom: 1px dashed #000; margin: 6px 0; }
+          .border-dotted { border-bottom: 1px dotted #000; margin: 6px 0; }
+          
+          .greeting { font-size: ${s.font_size_greeting || '14'}px; margin-bottom: 2px; font-weight: bold; }
+          .header { font-size: ${s.font_size_header || '20'}px; margin-bottom: 2px; font-weight: bold; text-transform: uppercase; }
+          .contact { font-size: ${s.font_size_contact || '12'}px; margin-bottom: 8px; white-space: pre-wrap; }
+          .total-row { font-size: ${s.font_size_total || '15'}px; font-weight: bold; margin: 6px 0; }
+          .footer { font-size: ${s.font_size_footer || '12'}px; margin-top: 8px; white-space: pre-wrap; font-weight: bold; }
+          .watermark { font-size: ${s.font_size_watermark || '9'}px; margin-top: 10px; }
+          .receipt-title { font-size: ${s.font_size_body ? s.font_size_body + 2 : '14'}px; font-weight: bold; margin: 8px 0; background: #000; color: #fff; padding: 3px; text-align: center; }
         </style>
       </head>
       <body>
-        ${s.show_logo !== false && s.logo_url ? `<div class="text-center" style="margin-bottom: 5px;"><img src="${s.logo_url}" style="height: 50px; filter: grayscale(100%);" /></div>` : ''}
-        ${s.show_greeting !== false ? `<div class="text-center font-bold" style="font-size: 14px; margin-bottom: 2px;">${s.greeting_text || 'ආයුබෝවන්'}</div>` : ''}
-        ${s.show_header !== false ? `<div class="text-center font-bold" style="font-size: 16px; margin-bottom: 5px;">${s.header_text || 'Nishadi Motors'}</div>` : ''}
-        ${s.show_contact !== false ? `<div class="text-center text-xs" style="margin-bottom: 8px; white-space: pre-wrap;">${s.contact_info || ''}</div>` : ''}
+        ${s.show_logo !== false && s.logo_url ? `<div class="text-center" style="margin-bottom: 8px;"><img src="${s.logo_url}" style="width: ${s.logo_size || '60'}px; height: auto; filter: grayscale(100%);" /></div>` : ''}
+        
+        ${s.show_greeting !== false ? `<div class="text-center greeting">${s.greeting_text || 'ආයුබෝවන්'}</div>` : ''}
+        ${s.show_header !== false ? `<div class="text-center header">${s.header_text || 'SHOP NAME'}</div>` : ''}
+        ${s.show_contact !== false ? `<div class="text-center contact">${s.contact_info || 'Address\nPhone'}</div>` : ''}
 
         <div class="receipt-title">PAYMENT RECEIPT</div>
-        
-        <div class="border-b"></div>
-        <div><strong>Receipt No:</strong> ${receiptNo}</div>
-        <div><strong>Bill No:</strong> #${bill.bill_no || receiptId}</div>
-        <div><strong>Date:</strong> ${new Date().toLocaleString()}</div>
-        <div><strong>Customer:</strong> ${bill.customers?.name || 'Walk-in'}</div>
-        ${bill.customers?.phone ? `<div><strong>Phone:</strong> ${bill.customers.phone}</div>` : ''}
-        <div class="border-b"></div>
 
-        <div class="flex"><span>Bill Total:</span> <span>${currency}${parseFloat(finalTotal).toLocaleString()}</span></div>
-        <div class="flex"><span>Prev. Paid:</span> <span>${currency}${parseFloat(bill.paid_amount || 0).toLocaleString()}</span></div>
-        <div class="flex font-bold" style="margin-top: 4px;"><span>Paid Now:</span> <span>${currency}${parseFloat(paidNow).toLocaleString()}</span></div>
-        
-        <div class="border-b"></div>
-        <div class="flex font-bold" style="font-size: 13px;"><span>Balance Due:</span> <span>${currency}${balanceDue.toLocaleString()}</span></div>
-        <div class="border-b"></div>
+        <div style="margin-top: 10px;"></div>
 
+        <div class="flex">
+          <div>Receipt No: ${receiptNo}</div>
+          <div>Bill No: #${bill.bill_no || receiptId}</div>
+        </div>
+        <div style="margin-top: 4px;">Date: ${new Date().toLocaleString()}</div>
+
+        <div style="margin-top: 4px;">
+          <div>Customer : "${bill.customers?.name || 'Walk-in'}"</div>
+          ${bill.customers?.phone ? `<div>Phone: ${bill.customers.phone}</div>` : ''}
+        </div>
+
+        <div class="border-dashed"></div>
+
+        <div class="flex" style="margin-top: 4px;">
+          <span>Bill Total</span>
+          <span>${currency}${Number(finalTotal).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>
+        </div>
+        <div class="flex" style="margin-top: 2px;">
+          <span>Prev. Paid</span>
+          <span>${currency}${Number(bill.paid_amount || 0).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>
+        </div>
+        
+        <div class="border-dashed" style="margin: 6px 0;"></div>
+
+        <div class="flex total-row">
+          <span>Paid Now</span>
+          <span>${currency}${Number(paidNow).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>
+        </div>
+
+        <div class="border-dashed" style="margin: 6px 0;"></div>
+
+        <div class="flex font-bold" style="margin-top: 4px;">
+          <span>Balance Due</span>
+          <span>${currency}${Number(balanceDue).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>
+        </div>
+
+        <div class="border-dashed" style="margin-top: 6px;"></div>
+        
         ${s.show_dynamic_qr !== false ? `
         <div class="text-center" style="margin: 10px 0;">
-          <img src="${qrUrl}" style="height: 60px; width: 60px; filter: grayscale(100%);" />
-          <div style="font-size: 8px; margin-top: 3px; color: #555;">Scan QR for Receipt Info</div>
+          <img src="${qrUrl}" style="width: ${s.qr_size || '80'}px; height: ${s.qr_size || '80'}px; filter: grayscale(100%); mix-blend-mode: multiply;" />
+          <div style="font-size: ${s.font_size_body ? s.font_size_body - 2 : '10'}px; margin-top: 3px; color: #333;">Scan for Details</div>
         </div>` : ''}
 
         ${s.show_footer !== false ? `
-        <div class="text-center font-bold text-xs" style="margin-top: 8px; white-space: pre-wrap;">${s.footer_text || 'Thank You! Come Again.'}\n${s.footer_text_sinhala || 'ස්තුතියි! නැවත එන්න...'}</div>` : ''}
+        <div class="text-center footer">${s.footer_text || 'Thank You! Come Again...'}\n${s.footer_text_sinhala || 'ස්තුතියි! නැවත එන්න...'}</div>` : ''}
+        
+        <div class="border-dotted" style="margin-top: 10px;"></div>
 
-        <div class="text-center" style="font-size: 8px; margin-top: 15px; border-top: 1px dotted #000; padding-top: 5px; color: #000;">
-          Powered by Nishadi Enterprise Suite.<br/>
-          Design & Developed by Ceylon Digi Solutions
-        </div>
+        ${s.show_watermark !== false ? `
+        <div class="text-center watermark">Powered by Nishadi Enterprise Suite.<br/>Design & Developed by Ceylon Digi Solutions</div>` : ''}
       </body>
       </html>
     `;
@@ -320,9 +347,7 @@ export default function Payments() {
           branch_id: branch,
           amount_paid: amountToPay
         })
-      } catch (receiptErr) {
-        console.log("Optional receipt table error:", receiptErr)
-      }
+      } catch (receiptErr) {}
 
       showToast('Payment processed & receipt printed!', 'success')
       setIsModalOpen(false)
@@ -380,7 +405,7 @@ export default function Payments() {
             </div>
 
             <button 
-              onClick={startScanner} // 👈 මෙතන Function එක වෙනස් කළා
+              onClick={startScanner}
               className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold px-6 py-4 rounded-xl shadow-lg transition flex items-center justify-center gap-2 text-lg whitespace-nowrap"
             >
               <FiCamera size={22} /> Scan QR
@@ -462,7 +487,6 @@ export default function Payments() {
           </div>
         )}
 
-        {/* 📷 අලුතින් හැදුව Scanner Modal එක */}
         {isScannerOpen && (
           <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4 animate-fadeIn">
             <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl w-full max-w-md p-6 text-center space-y-4">

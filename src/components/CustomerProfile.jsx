@@ -6,7 +6,6 @@ import { useToast } from '../context/ToastContext'
 import { useRouter } from 'next/navigation'
 import PageTemplate from './PageTemplate'
 
-// 🚀 Capacitor & Bluetooth Utility Imports
 import { Capacitor } from '@capacitor/core';
 import { printNativeBluetooth } from '../utils/printerUtils';
 
@@ -58,7 +57,7 @@ export default function CustomerProfile({ customerId }) {
       if (modeFilter !== 'all') query = query.eq('payment_mode', modeFilter)
       const { data, error } = await query
       if (!error) setTransactions(data || [])
-    } catch (err) { console.error(err) }
+    } catch (err) {}
   }
 
   const loadOrders = async () => {
@@ -86,7 +85,6 @@ export default function CustomerProfile({ customerId }) {
         setOrders(formattedOrders)
       }
     } catch (err) {
-      console.error(err)
     } finally {
       setLoading(false)
     }
@@ -110,12 +108,10 @@ export default function CustomerProfile({ customerId }) {
         })
         setPaymentSplit(split)
       }
-    } catch (err) {
-      console.error(err)
-    }
+    } catch (err) {}
   }
 
-  // 🖨️ UNIVERSAL RECEIPT PRINTING FOR CUSTOMER BILL HISTORY (Native Bluetooth / PC Iframe)
+  // 🖨️ EXACT DESIGN RECEIPT PRINTING FOR CUSTOMER BILL HISTORY 
   const printOrder = (order) => {
     const s = billSettings || {};
     const currency = 'Rs. ';
@@ -142,154 +138,167 @@ export default function CustomerProfile({ customerId }) {
         <style>
           @page { margin: 0; size: ${s.paper_size || '80mm'} auto; } 
           body { 
-            font-family: 'Courier New', Courier, monospace; 
+            font-family: 'Courier New', Courier, monospace, sans-serif; 
             width: ${s.paper_size === '58mm' ? '48mm' : '72mm'}; 
             margin: 0 auto; 
             padding-top: ${s.margin_top !== undefined ? s.margin_top : 10}px;
             padding-bottom: ${s.margin_bottom !== undefined ? s.margin_bottom : 10}px;
             padding-left: ${s.margin_left !== undefined ? s.margin_left : 10}px;
             padding-right: ${s.margin_right !== undefined ? s.margin_right : 10}px;
-            color: black; 
-            font-size: 11px;
-            line-height: 1.2;
+            color: #000; 
+            font-size: ${s.font_size_body || '12'}px;
+            line-height: 1.4;
           }
           .text-center { text-align: center; }
           .font-bold { font-weight: bold; }
-          .flex { display: flex; justify-content: space-between; align-items: flex-end; }
-          .border-b { border-bottom: 1px dashed black; margin: 4px 0; padding-bottom: 2px; }
-          .border-t { border-top: 1px dashed black; margin-top: 4px; padding-top: 4px; }
-          .item-name { font-weight: bold; margin-bottom: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
-          .item-row { display: flex; justify-content: space-between; margin-bottom: 6px; font-size: 10px; }
-          .col-mrp { width: 33%; text-align: left; }
-          .col-rate { width: 25%; text-align: center; }
-          .col-qty { width: 16%; text-align: center; }
-          .col-amt { width: 25%; text-align: right; }
-          .text-xs { font-size: 9px; }
+          .flex { display: flex; justify-content: space-between; align-items: flex-start; }
+          .border-dashed { border-bottom: 1px dashed #000; margin: 6px 0; }
+          .border-dotted { border-bottom: 1px dotted #000; margin: 6px 0; }
+          .item-name { margin-bottom: 2px; }
+          .item-row { display: flex; justify-content: space-between; align-items: center; }
+          
+          .col-mrp { width: 30%; text-align: left; }
+          .col-rate { width: 25%; text-align: right; }
+          .col-qty { width: 15%; text-align: center; }
+          .col-amt { width: 30%; text-align: right; }
+          
+          .greeting { font-size: ${s.font_size_greeting || '14'}px; margin-bottom: 2px; font-weight: bold; }
+          .header { font-size: ${s.font_size_header || '20'}px; margin-bottom: 2px; font-weight: bold; text-transform: uppercase; }
+          .contact { font-size: ${s.font_size_contact || '12'}px; margin-bottom: 8px; white-space: pre-wrap; }
+          .total-row { font-size: ${s.font_size_total || '15'}px; font-weight: bold; margin: 6px 0; }
+          .footer { font-size: ${s.font_size_footer || '12'}px; margin-top: 8px; white-space: pre-wrap; font-weight: bold; }
+          .watermark { font-size: ${s.font_size_watermark || '9'}px; margin-top: 10px; }
         </style>
       </head>
       <body>
-        ${s.show_logo !== false && s.logo_url ? `<div class="text-center" style="margin-bottom: 5px;"><img src="${s.logo_url}" style="height: 50px; filter: grayscale(100%);" /></div>` : ''}
-        ${s.show_greeting !== false ? `<div class="text-center font-bold" style="font-size: 14px; margin-bottom: 2px;">${s.greeting_text || 'ආයුබෝවන්'}</div>` : ''}
-        ${s.show_header !== false ? `<div class="text-center font-bold" style="font-size: 16px; margin-bottom: 5px;">${s.header_text || 'SHOP NAME'}</div>` : ''}
-        ${s.show_contact !== false ? `<div class="text-center text-xs" style="margin-bottom: 8px; white-space: pre-wrap;">${s.contact_info || ''}</div>` : ''}
-        ${s.show_tax_no !== false && s.tax_number ? `<div class="text-center text-xs" style="margin-bottom: 4px;">VAT/TAX: ${s.tax_number}</div>` : ''}
+        ${s.show_logo !== false && s.logo_url ? `<div class="text-center" style="margin-bottom: 8px;"><img src="${s.logo_url}" style="width: ${s.logo_size || '60'}px; height: auto; filter: grayscale(100%);" /></div>` : ''}
+        
+        ${s.show_greeting !== false ? `<div class="text-center greeting">${s.greeting_text || 'ආයුබෝවන්'}</div>` : ''}
+        ${s.show_header !== false ? `<div class="text-center header">${s.header_text || 'SHOP NAME'}</div>` : ''}
+        ${s.show_contact !== false ? `<div class="text-center contact">${s.contact_info || 'Address\nPhone'}</div>` : ''}
+        ${s.show_tax_no !== false && s.tax_number ? `<div class="text-center contact" style="margin-bottom: 4px;">VAT/TAX: ${s.tax_number}</div>` : ''}
+
+        <div style="margin-top: 10px;"></div>
 
         ${(s.show_bill_no !== false || s.show_date_time !== false) ? `
-        <div class="flex text-xs" style="margin-bottom: 4px;">
-          ${s.show_bill_no !== false ? `<div>${s.bill_number_prefix || 'INV-'}${receiptId}</div>` : '<div></div>'}
+        <div class="flex">
+          ${s.show_bill_no !== false ? `<div>Bill ${s.bill_number_prefix || 'RBR-'}${receiptId}</div>` : '<div></div>'}
           ${s.show_date_time !== false ? `<div>${receiptDate}</div>` : ''}
         </div>` : ''}
 
         ${s.show_customer_info !== false && hasCustomer ? `
-        <div class="text-xs" style="margin-bottom: 4px; word-break: break-word;">
-          ${custName ? `<div>Customer: ${custName}</div>` : ''}
+        <div style="margin-top: 2px;">
+          ${custName ? `<div>Customer: "${custName}"</div>` : ''}
           ${custPhone ? `<div>Phone: ${custPhone}</div>` : ''}
         </div>` : ''}
 
-        <div class="border-b"></div>
+        <div class="border-dashed"></div>
 
         ${s.show_table_headers !== false ? `
-        <div class="flex font-bold text-xs" style="margin-bottom: 4px;">
+        <div class="flex font-bold" style="margin-bottom: 4px;">
           <div class="col-mrp">උපරිම<br/>සිල්ලර<br/>මිල</div>
-          <div class="col-rate" style="display:flex; align-items:flex-end; justify-content:center;">Rate</div>
+          <div class="col-rate" style="display:flex; align-items:flex-end; justify-content:flex-end;">Rate</div>
           <div class="col-qty" style="display:flex; align-items:flex-end; justify-content:center;">Qty</div>
           <div class="col-amt" style="display:flex; align-items:flex-end; justify-content:flex-end;">Amount</div>
         </div>
-        <div class="border-b"></div>
+        <div class="border-dashed"></div>
         ` : ''}
 
         <div style="margin-top: 4px;">
           ${validItems.map(item => `
-            <div>
+            <div style="margin-bottom: 6px;">
               <div class="item-name">${item.name}</div>
               <div class="item-row">
-                <div class="col-mrp">${item.price.toFixed(2)}</div>
-                <div class="col-rate">${item.price.toFixed(2)}</div>
+                <div class="col-mrp">${Number(item.price).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</div>
+                <div class="col-rate">${Number(item.price).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</div>
                 <div class="col-qty">${item.quantity}</div>
-                <div class="col-amt">${(item.price * item.quantity).toFixed(2)}</div>
+                <div class="col-amt">${Number(item.price * item.quantity).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</div>
               </div>
             </div>
           `).join('')}
         </div>
 
-        <div class="border-b"></div>
+        <div class="border-dashed"></div>
 
         ${s.show_total_items !== false ? `
-        <div class="flex text-xs" style="margin-top: 4px;">
-          <span>Total Items:</span>
+        <div class="flex" style="margin-top: 4px;">
+          <span>Total Items</span>
           <span>${totalQty}</span>
         </div>` : ''}
 
         ${s.show_subtotal !== false ? `
-        <div class="flex text-xs" style="margin-top: 2px;">
-          <span>Subtotal:</span>
-          <span>${billSubtotal.toFixed(2)}</span>
+        <div class="flex" style="margin-top: 2px;">
+          <span>Subtotal</span>
+          <span>${Number(billSubtotal).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>
         </div>
         ${billDiscount > 0 ? `
-        <div class="flex text-xs">
-          <span>Discount:</span>
-          <span>-${billDiscount.toFixed(2)}</span>
+        <div class="flex" style="margin-bottom: 2px;">
+          <span>Discount</span>
+          <span>${Number(billDiscount).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>
         </div>` : ''}
         ` : ''}
 
-        <div class="flex font-bold border-t" style="font-size: 14px; margin-top: 4px;">
-          <span>TOTAL:</span>
-          <span>${currency}${billTotal.toFixed(2)}</span>
+        <div class="border-dashed" style="margin: 6px 0;"></div>
+
+        <div class="flex total-row">
+          <span>Total Amount</span>
+          <span>${currency}${Number(billTotal).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>
         </div>
 
         ${s.show_payment_details !== false ? `
-        <div class="flex text-xs" style="margin-top: 4px; color: #333;">
-          <span>Payment details:</span>
-          <span>${paymentMethod.toUpperCase()}</span>
+        <div class="flex" style="margin-top: 4px;">
+          <span>Payment details</span>
+          <span>${paymentMethod.charAt(0).toUpperCase() + paymentMethod.slice(1)}</span>
         </div>` : ''}
 
-        <div class="border-b" style="margin-top: 4px;"></div>
+        <div class="border-dashed" style="margin-top: 6px;"></div>
 
         ${returnedItems.length > 0 ? `
-        <div class="text-center font-bold" style="margin-top: 15px; font-size: 12px; color: #d32f2f;">--- RETURNED ITEMS ---</div>
+        <div class="text-center font-bold" style="margin-top: 15px; font-size: ${s.font_size_body || '12'}px; color: #000;">--- RETURNED ITEMS ---</div>
         
-        <div class="flex font-bold text-[9px]" style="margin-top: 4px; color: #d32f2f;">
+        <div class="flex font-bold" style="margin-top: 4px;">
           <div class="col-mrp" style="width: 50%;">Item</div>
           <div class="col-qty" style="width: 20%; display:flex; align-items:flex-end; justify-content:center;">R.Qty</div>
           <div class="col-amt" style="width: 30%; display:flex; align-items:flex-end; justify-content:flex-end;">Refund</div>
         </div>
-        <div class="border-b" style="border-top: 1px dashed black; border-color: #d32f2f;"></div>
+        <div class="border-dashed"></div>
 
-        <div style="margin-top: 4px; color: #d32f2f;">
+        <div style="margin-top: 4px;">
           ${returnedItems.map(item => `
-            <div>
+            <div style="margin-bottom: 6px;">
               <div class="item-name">${item.name}</div>
               <div class="item-row">
                 <div class="col-mrp" style="width: 50%;"></div>
                 <div class="col-qty" style="width: 20%;">${item.returned_quantity}</div>
-                <div class="col-amt" style="width: 30%;">-${(item.price * item.returned_quantity).toFixed(2)}</div>
+                <div class="col-amt" style="width: 30%;">-${Number(item.price * item.returned_quantity).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</div>
               </div>
             </div>
           `).join('')}
         </div>
-        <div class="flex font-bold text-xs" style="margin-top: 4px; color: #d32f2f;">
+        <div class="flex font-bold" style="margin-top: 4px;">
           <span>Total Refund:</span>
-          <span>-${currency}${totalRefund.toFixed(2)}</span>
+          <span>-${currency}${Number(totalRefund).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>
         </div>
-        <div class="border-b" style="margin-top: 5px;"></div>
+        <div class="border-dashed" style="margin-top: 5px;"></div>
         ` : ''}
         
         ${s.show_dynamic_qr !== false ? `
         <div class="text-center" style="margin: 10px 0;">
-          <img src="https://api.qrserver.com/v1/create-qr-code/?size=100x100&data=${encodeURIComponent(`${s.header_text || 'Shop'}\nBill: ${s.bill_number_prefix || 'INV-'}${receiptId}\nTotal: Rs.${billTotal.toFixed(2)}`)}" style="height: 60px; width: 60px; filter: grayscale(100%);" />
-          <div style="font-size: 8px; margin-top: 3px; color: #555;">Scan for Details</div>
+          <img src="https://api.qrserver.com/v1/create-qr-code/?size=100x100&data=${encodeURIComponent(`${s.header_text || 'Shop'}\nBill: ${s.bill_number_prefix || 'INV-'}${receiptId}\nTotal: Rs.${billTotal.toFixed(2)}`)}" style="width: ${s.qr_size || '80'}px; height: ${s.qr_size || '80'}px; filter: grayscale(100%); mix-blend-mode: multiply;" />
+          <div style="font-size: ${s.font_size_body ? s.font_size_body - 2 : '10'}px; margin-top: 3px; color: #333;">Scan for Details</div>
         </div>` : ''}
 
         ${s.show_footer !== false ? `
-        <div class="text-center font-bold text-xs" style="margin-top: 8px; white-space: pre-wrap;">${s.footer_text || 'Thank You! Come Again.'}\n${s.footer_text_sinhala || 'ස්තුතියි! නැවත එන්න...'}</div>` : ''}
+        <div class="text-center footer">${s.footer_text || 'Thank You! Come Again...'}\n${s.footer_text_sinhala || 'ස්තුතියි! නැවත එන්න...'}</div>` : ''}
         
+        <div class="border-dotted" style="margin-top: 10px;"></div>
+
         ${s.show_watermark !== false ? `
-        <div class="text-center" style="font-size: 8px; margin-top: 15px; color: #777;">System by Ceylon Digi Solutions</div>` : ''}
+        <div class="text-center watermark">Powered by Nishadi Enterprise Suite.<br/>Design & Developed by Ceylon Digi Solutions</div>` : ''}
       </body>
       </html>
     `;
     
-    // 📱 Device Detection & Universal Printing
     if (Capacitor.isNativePlatform()) {
       showToast('Printing bill via Bluetooth...', 'info');
       printNativeBluetooth(receiptHTML)
