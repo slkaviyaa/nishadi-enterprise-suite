@@ -52,7 +52,7 @@ export default function Inventory() {
   const [csvHeaders, setCsvHeaders] = useState([])
   const [csvData, setCsvData] = useState([])
   const [fieldMapping, setFieldMapping] = useState({
-    name: '', category: '', sku: '', cost_price: '', selling_price: '', stock_quantity: ''
+    name: '', category: '', sku: '', barcode: '', cost_price: '', selling_price: '', stock_quantity: ''
   })
   const [previewData, setPreviewData] = useState([])
 
@@ -62,7 +62,8 @@ export default function Inventory() {
     { key: 'selling_price', label: 'Selling Price', required: true },
     { key: 'cost_price', label: 'Cost Price', required: false },
     { key: 'stock_quantity', label: 'Stock', required: false },
-    { key: 'sku', label: 'Part Number / Barcode', required: false }
+    { key: 'sku', label: 'System SKU (optional)', required: false },
+    { key: 'barcode', label: 'Part Number / Barcode (optional)', required: false }
   ]
 
   const loadInitialInventory = async () => {
@@ -247,7 +248,7 @@ export default function Inventory() {
       if (isEditing) {
         await supabase.from('products').update({ 
           sku: formData.sku, 
-          barcode: formData.barcode, 
+          barcode: formData.barcode || null, 
           name: formData.name, 
           category: formData.category || 'Uncategorized' 
         }).eq('id', currentProductId)
@@ -269,7 +270,7 @@ export default function Inventory() {
       } else {
         const { data: newProd, error: prodErr } = await supabase.from('products').insert({ 
           sku: formData.sku || `ITM-${Date.now().toString().slice(-6)}`, 
-          barcode: formData.barcode, 
+          barcode: formData.barcode || null, 
           name: formData.name, 
           category: formData.category || 'Uncategorized' 
         }).select().single()
@@ -361,12 +362,13 @@ export default function Inventory() {
       setCsvHeaders(headers)
       setCsvData(data)
 
-      const newMapping = { name: '', category: '', sku: '', cost_price: '', selling_price: '', stock_quantity: '' }
+      const newMapping = { name: '', category: '', sku: '', barcode: '', cost_price: '', selling_price: '', stock_quantity: '' }
       headers.forEach(h => {
         const lower = h.toLowerCase()
         if (lower.includes('name') || lower.includes('item') || lower.includes('description')) newMapping.name = h
         else if (lower.includes('category')) newMapping.category = h
-        else if (lower.includes('sku') || lower.includes('barcode') || lower.includes('code') || lower.includes('part')) newMapping.sku = h
+        else if (lower.includes('sku')) newMapping.sku = h
+        else if (lower.includes('barcode') || lower.includes('part') || lower.includes('code')) newMapping.barcode = h
         else if (lower.includes('cost')) newMapping.cost_price = h
         else if (lower.includes('selling') || lower.includes('retail') || lower.includes('price') || lower.includes('mrp')) newMapping.selling_price = h
         else if (lower.includes('stock') || lower.includes('qty') || lower.includes('quantity')) newMapping.stock_quantity = h
@@ -400,8 +402,8 @@ export default function Inventory() {
         selling_price: getVal('selling_price'),
         cost_price: getVal('cost_price'),
         stock_quantity: getVal('stock_quantity'),
-        barcode: getVal('sku'),
-        sku: '' // Allow UI edit, backend fallback if empty
+        sku: getVal('sku'),
+        barcode: getVal('barcode')
       }
     }).filter(r => r.name)
 
@@ -422,6 +424,7 @@ export default function Inventory() {
     return isNaN(num) ? 0 : num
   }
 
+  // 🔥 FIXED: Multi-branch aware import with manual insert/update
   const saveImportToDatabase = async () => {
     try {
       setLoading(true)
@@ -433,83 +436,174 @@ export default function Inventory() {
         return
       }
 
-      const itemMap = {}
-      validItems.forEach((item) => {
-        const rawBarcode = item.barcode ? String(item.barcode).trim() : ''
-        const mapKey = rawBarcode || String(item.name).trim().toLowerCase()
+      const cleanedItems = validItems.map((item, index) => {
+        const userSku = item.sku && String(item.sku).trim() !== '' ? String(item.sku).trim() : null
+        const rawBarcode = item.barcode && String(item.barcode).trim() !== '' ? String(item.barcode).trim() : null
 
-        if (itemMap[mapKey]) {
-          itemMap[mapKey].stockQty += cleanNumber(item.stock_quantity)
-        } else {
-          itemMap[mapKey] = {
-            name: String(item.name).trim(),
-            category: item.category ? String(item.category).trim() : 'Uncategorized',
-            costPrice: cleanNumber(item.cost_price),
-            sellingPrice: cleanNumber(item.selling_price) > 0 ? cleanNumber(item.selling_price) : 1,
-            stockQty: cleanNumber(item.stock_quantity),
-            barcode: rawBarcode,
-            // User input SKU or Auto Gen
-            systemSku: item.sku ? String(item.sku).trim() : `ITM-${Date.now().toString().slice(-4)}-${Math.floor(Math.random() * 9000) + 1000}`
-          }
+        return {
+          name: String(item.name).trim(),
+          category: item.category ? String(item.category).trim() : 'Uncategorized',
+          costPrice: cleanNumber(item.cost_price),
+          sellingPrice: cleanNumber(item.selling_price) > 0 ? cleanNumber(item.selling_price) : 1,
+          stockQty: cleanNumber(item.stock_quantity),
+          barcode: rawBarcode,
+          userSku: userSku,
+          sku: userSku || `ITM-${Date.now().toString(36)}-${index}-${Math.floor(Math.random() * 10000)}`
         }
       })
 
-      const cleanedItems = Object.values(itemMap)
       let successCount = 0
-      const BATCH_SIZE = 100
+      const BATCH_SIZE = 50
 
       for (let i = 0; i < cleanedItems.length; i += BATCH_SIZE) {
         const batch = cleanedItems.slice(i, i + BATCH_SIZE)
-        const batchBarcodes = batch.map(b => b.barcode).filter(Boolean)
 
-        const existingMap = {}
-        if (batchBarcodes.length > 0) {
-          const { data: existingProds } = await supabase
+        // Gather SKUs in batch
+        const skusInBatch = batch.map(b => b.sku)
+
+        // Query existing products by SKU
+        const { data: existingProducts, error: existingErr } = await supabase
+          .from('products')
+          .select('id, sku')
+          .in('sku', skusInBatch)
+
+        if (existingErr) throw new Error("Existing SKU check error: " + existingErr.message)
+
+        const existingSkuToId = {}
+        ;(existingProducts || []).forEach(p => {
+          existingSkuToId[p.sku] = p.id
+        })
+
+        const productsToInsert = []
+        const usedSkuSet = new Set()
+
+        // Resolve SKUs and find existing or mark for insert
+        batch.forEach((item, idx) => {
+          let finalSku = item.sku
+          let productId = null
+
+          if (item.userSku) {
+            if (existingSkuToId[finalSku]) {
+              // Existing product found
+              productId = existingSkuToId[finalSku]
+              finalSku = item.userSku
+            } else {
+              if (usedSkuSet.has(finalSku)) {
+                finalSku = `ITM-${Date.now().toString(36)}-${i + idx}-${Math.floor(Math.random() * 100000)}`
+              } else {
+                usedSkuSet.add(finalSku)
+                productsToInsert.push({
+                  sku: finalSku,
+                  barcode: item.barcode,
+                  name: item.name,
+                  category: item.category
+                })
+              }
+            }
+          } else {
+            while (usedSkuSet.has(finalSku) || existingSkuToId[finalSku]) {
+              finalSku = `ITM-${Date.now().toString(36)}-${i + idx}-${Math.floor(Math.random() * 100000)}`
+            }
+            usedSkuSet.add(finalSku)
+            productsToInsert.push({
+              sku: finalSku,
+              barcode: item.barcode,
+              name: item.name,
+              category: item.category
+            })
+          }
+
+          item.finalSku = finalSku
+          if (productId) item.productId = productId
+        })
+
+        // Insert new products (if any)
+        if (productsToInsert.length > 0) {
+          const { data: createdProds, error: pErr } = await supabase
             .from('products')
-            .select('id, sku, barcode')
-            .in('barcode', batchBarcodes)
-          ;(existingProds || []).forEach(p => {
-            if (p.barcode) existingMap[p.barcode] = p.id
+            .insert(productsToInsert)
+            .select('id, sku')
+
+          if (pErr) throw new Error("Insert Error: " + pErr.message)
+
+          ;(createdProds || []).forEach(p => {
+            existingSkuToId[p.sku] = p.id
           })
         }
 
-        const newToInsert = []
-        batch.forEach(b => {
-          if (b.barcode && existingMap[b.barcode]) {
-            b.finalProductId = existingMap[b.barcode]
-          } else {
-            newToInsert.push({ sku: b.systemSku, barcode: b.barcode, name: b.name, category: b.category })
+        // Assign productId to items that didn't have one (newly inserted)
+        batch.forEach(item => {
+          if (!item.productId && item.finalSku) {
+            item.productId = existingSkuToId[item.finalSku]
           }
         })
 
-        if (newToInsert.length > 0) {
-          const { data: createdProds } = await supabase
-            .from('products')
-            .insert(newToInsert)
-            .select('id, barcode, sku')
-
-          ;(createdProds || []).forEach(p => {
-            const matched = batch.find(b => (b.barcode && b.barcode === p.barcode) || b.systemSku === p.sku)
-            if (matched) matched.finalProductId = p.id
-          })
-        }
-
-        const branchPayloads = batch.map(b => {
-          if (!b.finalProductId) return null
-          return {
-            product_id: b.finalProductId,
+        // Prepare branch_products payloads
+        const branchPayloads = batch
+          .filter(item => item.productId)
+          .map(item => ({
+            product_id: item.productId,
             branch_id: branch,
-            price: b.sellingPrice,
-            cost_price: b.costPrice,
-            stock_quantity: b.stockQty
-          }
-        }).filter(Boolean)
+            price: item.sellingPrice,
+            cost_price: item.costPrice,
+            stock_quantity: item.stockQty
+          }))
 
+        // ==== FIX: Manual insert/update instead of upsert with composite key ====
         if (branchPayloads.length > 0) {
-          const { error: bpErr } = await supabase
+          const productIds = branchPayloads.map(bp => bp.product_id)
+
+          const { data: existingBps, error: existingBpsErr } = await supabase
             .from('branch_products')
-            .upsert(branchPayloads, { onConflict: 'branch_id,product_id' })
-          if (!bpErr) successCount += branchPayloads.length
+            .select('id, product_id')
+            .eq('branch_id', branch)
+            .in('product_id', productIds)
+
+          if (existingBpsErr) throw new Error("Existing branch_products check error: " + existingBpsErr.message)
+
+          const existingMap = {}
+          ;(existingBps || []).forEach(bp => {
+            existingMap[bp.product_id] = bp.id
+          })
+
+          const toInsert = []
+          const toUpdate = []
+
+          branchPayloads.forEach(bp => {
+            if (existingMap[bp.product_id]) {
+              toUpdate.push({
+                id: existingMap[bp.product_id],
+                price: bp.price,
+                cost_price: bp.cost_price,
+                stock_quantity: bp.stock_quantity
+              })
+            } else {
+              toInsert.push(bp)
+            }
+          })
+
+          // Insert new branch products
+          if (toInsert.length > 0) {
+            const { error: insErr } = await supabase
+              .from('branch_products')
+              .insert(toInsert)
+            if (insErr) throw new Error("Stock Insert Error: " + insErr.message)
+          }
+
+          // Update existing branch products
+          for (const upd of toUpdate) {
+            const { error: upErr } = await supabase
+              .from('branch_products')
+              .update({
+                price: upd.price,
+                cost_price: upd.cost_price,
+                stock_quantity: upd.stock_quantity
+              })
+              .eq('id', upd.id)
+            if (upErr) throw new Error("Stock Update Error: " + upErr.message)
+          }
+
+          successCount += branchPayloads.length
         }
       }
 
@@ -518,7 +612,7 @@ export default function Inventory() {
       loadInitialInventory()
     } catch (err) {
       console.error('Import Error:', err)
-      showToast('Import Error: ' + err.message, 'error')
+      showToast(err.message, 'error')
     } finally {
       setLoading(false)
     }
@@ -538,21 +632,20 @@ export default function Inventory() {
     { label: 'Fast Moving Items', value: fastMovingList.length, icon: '🔥' }
   ]
 
-  // ================= 📊 COMPLETE EXCEL EXPORT (INVENTORY + MOVEMENT) =================
-  const exportExcel = async () => {
-    if (filteredProducts.length === 0 && movements.length === 0) {
+  // ================= 📊 SEPARATED EXPORT FUNCTIONS =================
+  
+  // 1. Export Current Inventory Only
+  const exportInventoryExcel = async () => {
+    if (filteredProducts.length === 0) {
       return showToast('No data available to export.', 'error')
     }
     setLoading(true)
-    
     try {
       const ExcelJS = (await import('exceljs')).default
       const fileSaver = await import('file-saver')
       const saveAs = fileSaver.saveAs || fileSaver.default?.saveAs || fileSaver.default
       
       const workbook = new ExcelJS.Workbook()
-
-      // ---------------- 1. SHEET 1: Current Product Inventory ----------------
       const invSheet = workbook.addWorksheet('Current Inventory')
 
       invSheet.columns = [
@@ -592,7 +685,30 @@ export default function Inventory() {
         }
       })
 
-      // ---------------- 2. SHEET 2: Stock Movement Report ----------------
+      const buffer = await workbook.xlsx.writeBuffer()
+      saveAs(new Blob([buffer]), `Inventory_Export_${new Date().toISOString().split('T')[0]}.xlsx`)
+      showToast('Inventory exported successfully!', 'success')
+      
+    } catch (err) {
+      console.error(err)
+      showToast('Failed to export Excel', 'error')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // 2. Export Stock Movement Only
+  const exportMovementExcel = async () => {
+    if (movements.length === 0) {
+      return showToast('No stock movement data to export.', 'error')
+    }
+    setReportLoading(true)
+    try {
+      const ExcelJS = (await import('exceljs')).default
+      const fileSaver = await import('file-saver')
+      const saveAs = fileSaver.saveAs || fileSaver.default?.saveAs || fileSaver.default
+      
+      const workbook = new ExcelJS.Workbook()
       const movementSheet = workbook.addWorksheet('Stock Movement')
 
       movementSheet.columns = [
@@ -612,19 +728,7 @@ export default function Inventory() {
       movementSheet.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F766E' } }
       movementSheet.getRow(1).alignment = { vertical: 'middle', horizontal: 'center' }
 
-      const exportMovementList = movements.length > 0 ? movements : filteredProducts.map(p => ({
-        sku: p.sku,
-        barcode: p.barcode,
-        name: p.name,
-        category: p.category,
-        cost: p.cost,
-        price: p.price,
-        added: p.lifetimeAdded,
-        sold: p.lifetimeSold,
-        balance: p.stock
-      }))
-
-      exportMovementList.forEach(m => {
+      movements.forEach(m => {
         movementSheet.addRow({
           sku: m.sku,
           barcode: m.barcode || 'N/A',
@@ -649,14 +753,14 @@ export default function Inventory() {
       })
 
       const buffer = await workbook.xlsx.writeBuffer()
-      saveAs(new Blob([buffer]), `Inventory_and_Stock_Movement_${new Date().toISOString().split('T')[0]}.xlsx`)
-      showToast('Inventory & Stock Movement exported successfully!', 'success')
+      saveAs(new Blob([buffer]), `Stock_Movement_${new Date().toISOString().split('T')[0]}.xlsx`)
+      showToast('Stock Movement exported successfully!', 'success')
       
     } catch (err) {
       console.error(err)
-      showToast('Failed to export Excel', 'error')
+      showToast('Failed to export Movement Excel', 'error')
     } finally {
-      setLoading(false)
+      setReportLoading(false)
     }
   }
 
@@ -667,6 +771,8 @@ export default function Inventory() {
       metrics={metrics}
     >
       <div className="space-y-6 pb-10">
+        
+        {/* 🔥 FAST MOVING */}
         {fastMovingList.length > 0 && (
           <div className="bg-gradient-to-r from-amber-50 to-orange-50 dark:from-amber-950/30 dark:to-orange-950/20 p-5 rounded-xl border border-orange-200 dark:border-orange-800/50 shadow-sm">
             <div className="flex items-center gap-2 mb-3">
@@ -693,6 +799,7 @@ export default function Inventory() {
           </div>
         )}
 
+        {/* 📦 INVENTORY TABLE */}
         <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-4">
           <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-4">
             <h3 className="font-bold text-gray-800 dark:text-white text-base">Current Product Stock Overview</h3>
@@ -704,8 +811,8 @@ export default function Inventory() {
                 <FiUpload size={14} /> Import CSV
               </button>
 
-              <button onClick={exportExcel} className="bg-indigo-100 hover:bg-indigo-200 dark:bg-indigo-900/30 text-indigo-800 dark:text-indigo-400 px-3 py-1.5 rounded-lg text-sm font-bold shadow-sm transition flex items-center gap-1.5 border border-indigo-200 dark:border-indigo-800/50" title="Exports both Current Inventory and Movement sheets">
-                <FiDownload size={14} /> Export All to Excel
+              <button onClick={exportInventoryExcel} className="bg-indigo-100 hover:bg-indigo-200 dark:bg-indigo-900/30 text-indigo-800 dark:text-indigo-400 px-3 py-1.5 rounded-lg text-sm font-bold shadow-sm transition flex items-center gap-1.5 border border-indigo-200 dark:border-indigo-800/50" title="Export Current Inventory">
+                <FiDownload size={14} /> Export Inventory
               </button>
               
               <button onClick={handleOpenAddModal} className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-lg text-sm font-bold shadow transition flex items-center gap-1.5">
@@ -815,6 +922,63 @@ export default function Inventory() {
                     </tr>
                   )
                 })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* 📈 STOCK MOVEMENT REPORT SECTION */}
+        <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-5">
+          <div className="flex flex-col xl:flex-row justify-between items-start xl:items-center gap-4 mb-5 border-b pb-4 dark:border-gray-700">
+            <div>
+              <h3 className="font-bold text-gray-800 dark:text-white text-base flex items-center gap-2">📈 Stock Movement Report</h3>
+              <p className="text-xs text-gray-500 mt-0.5">Filter by date range, track values and export beautifully</p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 w-full xl:w-auto">
+              <div className="flex items-center gap-1 text-xs">
+                <span className="text-gray-500">From:</span>
+                <input type="date" className="border border-gray-300 dark:border-gray-600 rounded-lg px-2 py-1.5 bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white outline-none focus:border-blue-500" value={dateFrom} onChange={e => setDateFrom(e.target.value)} />
+              </div>
+              <div className="flex items-center gap-1 text-xs">
+                <span className="text-gray-500">To:</span>
+                <input type="date" className="border border-gray-300 dark:border-gray-600 rounded-lg px-2 py-1.5 bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white outline-none focus:border-blue-500" value={dateTo} onChange={e => setDateTo(e.target.value)} />
+              </div>
+              <button onClick={() => generateMovementReport(products, dateFrom, dateTo)} disabled={reportLoading} className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold px-3 py-1.5 rounded-lg transition text-xs shadow-sm disabled:opacity-50 flex items-center gap-1">
+                <FiRefreshCw className={reportLoading ? 'animate-spin' : ''} /> Load
+              </button>
+              <button onClick={handleClearDates} className="bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-200 font-bold px-3 py-1.5 rounded-lg transition text-xs shadow-sm flex items-center gap-1">
+                <FiX /> Clear
+              </button>
+              <button onClick={exportMovementExcel} disabled={movements.length === 0} className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-4 py-1.5 rounded-lg transition text-xs shadow-sm disabled:opacity-50 flex items-center gap-1" title="Export Stock Movement Only">
+                <FiDownload size={14} /> Export Movement
+              </button>
+            </div>
+          </div>
+          <div className="overflow-x-auto overflow-y-auto max-h-[400px] custom-scrollbar border border-gray-100 dark:border-gray-700 rounded-lg">
+            <table className="w-full text-left border-collapse min-w-[800px]">
+              <thead className="sticky top-0 bg-gray-50 dark:bg-gray-700 shadow-sm z-10">
+                <tr className="text-[11px] font-bold text-gray-500 uppercase tracking-wider">
+                  <th className="p-3 border-b dark:border-gray-600">System SKU</th>
+                  <th className="p-3 border-b dark:border-gray-600">Item Name</th>
+                  <th className="p-3 border-b dark:border-gray-600 text-center text-green-600 bg-green-50/50 dark:bg-green-900/10">Added (+) & Value</th>
+                  <th className="p-3 border-b dark:border-gray-600 text-center text-red-600 bg-red-50/50 dark:bg-red-900/10">Sold (-) & Value</th>
+                  <th className="p-3 border-b dark:border-gray-600 text-center font-bold text-blue-600 bg-blue-50/50 dark:bg-blue-900/10">Balance & Value</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100 dark:divide-gray-700 text-sm">
+                {movements.length === 0 ? (
+                  <tr><td colSpan="5" className="p-8 text-center text-gray-400 font-medium">No stock movement to display. Set a date range or Clear to view all.</td></tr>
+                ) : (
+                  movements.map(m => (
+                    <tr key={m.id} className="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition">
+                      <td className="p-3 font-mono text-xs text-gray-500">{m.sku}</td>
+                      <td className="p-3 font-semibold text-gray-900 dark:text-white max-w-[250px] truncate" title={m.name}>{m.name}</td>
+                      <td className="p-3 text-center bg-green-50/30 dark:bg-green-900/10"><div className="font-bold text-green-600">{m.added > 0 ? `+${m.added}` : '0'}</div>{m.added > 0 && <div className="text-[10px] text-green-700/70 mt-0.5">{currency}{(m.added * m.cost).toLocaleString(undefined, { minimumFractionDigits: 2 })}</div>}</td>
+                      <td className="p-3 text-center bg-red-50/30 dark:bg-red-900/10"><div className="font-bold text-red-500">{m.sold > 0 ? `-${m.sold}` : '0'}</div>{m.sold > 0 && <div className="text-[10px] text-red-700/70 mt-0.5">{currency}{(m.sold * m.price).toLocaleString(undefined, { minimumFractionDigits: 2 })}</div>}</td>
+                      <td className="p-3 text-center bg-blue-50/30 dark:bg-blue-900/10"><div className="font-extrabold text-gray-900 dark:text-white">{m.balance}</div>{m.balance > 0 && <div className="text-[10px] text-blue-700/70 mt-0.5">{currency}{(m.balance * m.cost).toLocaleString(undefined, { minimumFractionDigits: 2 })}</div>}</td>
+                    </tr>
+                  ))
+                )}
               </tbody>
             </table>
           </div>
@@ -992,13 +1156,21 @@ export default function Inventory() {
                     {previewData.map((item, idx) => (
                       <tr key={idx} className="bg-white dark:bg-gray-800 hover:bg-blue-50/50 dark:hover:bg-blue-900/10 transition">
                         <td className="p-2">
-                          <input 
-                            type="text" 
-                            value={item.sku || ''} 
-                            onChange={(e) => handlePreviewEdit(idx, 'sku', e.target.value)} 
-                            className="w-full px-3 py-2 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded text-sm font-mono text-gray-500 dark:text-gray-400 outline-none focus:border-blue-500" 
-                            placeholder="Auto-generate" 
-                          />
+                          {item.sku && item.sku.trim() !== '' ? (
+                            <input
+                              type="text"
+                              value={item.sku}
+                              onChange={(e) => handlePreviewEdit(idx, 'sku', e.target.value)}
+                              className="w-full px-3 py-2 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded text-sm font-mono text-gray-500 dark:text-gray-400 outline-none focus:border-blue-500"
+                            />
+                          ) : (
+                            <input
+                              type="text"
+                              value="Auto"
+                              readOnly
+                              className="w-full px-3 py-2 bg-gray-100 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded text-sm font-mono text-gray-400 dark:text-gray-500 outline-none cursor-not-allowed"
+                            />
+                          )}
                         </td>
                         <td className="p-2">
                           <input type="text" value={item.name || ''} onChange={(e) => handlePreviewEdit(idx, 'name', e.target.value)} className="w-full px-3 py-2 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded text-sm font-semibold text-gray-900 dark:text-white outline-none focus:border-blue-500" />
@@ -1025,7 +1197,7 @@ export default function Inventory() {
               </div>
 
               <div className="p-5 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 flex justify-between items-center">
-                <span className="text-sm font-bold text-gray-600 dark:text-gray-400 bg-gray-200 dark:bg-gray-800 px-3 py-1 rounded-full">{previewData.length} items ready to import/update</span>
+                <span className="text-sm font-bold text-gray-600 dark:text-gray-400 bg-gray-200 dark:bg-gray-800 px-3 py-1 rounded-full">{previewData.length} items ready to import</span>
                 <div className="flex gap-3">
                   <button onClick={() => setImportStep(1)} className="px-6 py-2.5 rounded-xl font-bold text-gray-600 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:text-gray-300 transition">Back</button>
                   <button onClick={saveImportToDatabase} disabled={loading} className="px-8 py-2.5 rounded-xl font-bold text-white bg-blue-600 hover:bg-blue-700 shadow-md transition flex items-center gap-2 disabled:opacity-50">

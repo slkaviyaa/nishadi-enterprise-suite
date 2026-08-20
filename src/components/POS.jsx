@@ -62,7 +62,7 @@ export default function POS() {
   const [customerModal, setCustomerModal] = useState(false)
   const customerDropdownRef = useRef(null)
 
-  const [mobileView, setMobileView] = useState('products')
+  const [mobileView, setMobileView] = useState('products') // 'products' | 'billing' | 'checkout'
   const [isMobile, setIsMobile] = useState(false)
 
   const currency = settings?.currency_symbol || 'Rs. '
@@ -110,7 +110,8 @@ export default function POS() {
     requestAppPermissions()
   }, [])
 
-  const syncToParallelBranch = async (syncCart, mainDiscount, mainStatus, mainPaymentMethod) => {
+  // 🔥 FIXED: Customer sync to parallel branch
+  const syncToParallelBranch = async (syncCart, mainDiscount, mainStatus, mainPaymentMethod, mainCustomer = null) => {
     const targetBranchId = getSyncBranchId()
     if (!targetBranchId || syncCart.length === 0) return
 
@@ -151,22 +152,58 @@ export default function POS() {
       if (parallelItemsToInsert.length === 0) return
       const finalParallelTotal = Math.max(0, parallelTotal - mainDiscount)
 
-      const { data: pWalkIn } = await supabase
-        .from('customers')
-        .select('id')
-        .eq('branch_id', targetBranchId)
-        .ilike('name', 'Walk-in Customer')
-        .maybeSingle()
+      // ===== Customer sync fix =====
+      let targetCustId = null
 
-      let targetCustId = pWalkIn ? pWalkIn.id : null
-      if (!targetCustId) {
-        const { data: newCw } = await supabase
+      if (mainCustomer && mainCustomer.phone && mainCustomer.phone.trim() !== '' && mainCustomer.phone !== '0000000000') {
+        const { data: targetCust } = await supabase
           .from('customers')
-          .insert({ branch_id: targetBranchId, name: 'Walk-in Customer', phone: '0000000000' })
-          .select()
-          .single()
-        if (newCw) targetCustId = newCw.id
+          .select('id')
+          .eq('branch_id', targetBranchId)
+          .eq('phone', mainCustomer.phone)
+          .maybeSingle()
+
+        if (targetCust) {
+          targetCustId = targetCust.id
+        } else {
+          const { data: newCust, error: newCustErr } = await supabase
+            .from('customers')
+            .insert({
+              branch_id: targetBranchId,
+              name: mainCustomer.name || 'Customer',
+              phone: mainCustomer.phone,
+              address: mainCustomer.address || 'Synced from Main'
+            })
+            .select('id')
+            .single()
+
+          if (!newCustErr && newCust) {
+            targetCustId = newCust.id
+          }
+        }
       }
+
+      // Fallback: Walk-in customer
+      if (!targetCustId) {
+        const { data: pWalkIn } = await supabase
+          .from('customers')
+          .select('id')
+          .eq('branch_id', targetBranchId)
+          .ilike('name', 'Walk-in Customer')
+          .maybeSingle()
+
+        if (pWalkIn) {
+          targetCustId = pWalkIn.id
+        } else {
+          const { data: newCw } = await supabase
+            .from('customers')
+            .insert({ branch_id: targetBranchId, name: 'Walk-in Customer', phone: '0000000000' })
+            .select()
+            .single()
+          if (newCw) targetCustId = newCw.id
+        }
+      }
+      // ===== /Customer sync fix =====
 
       const { data: pOrder, error: pOrderErr } = await supabase
         .from('orders')
@@ -317,7 +354,17 @@ export default function POS() {
               if (item.autoUpdateStock === false) continue
               await supabase.rpc('decrement_stock', { bp_id: item.id, qty: item.qty })
             }
-            await syncToParallelBranch(billData.cart, billData.discount, billData.status, billData.paymentMethod)
+            await syncToParallelBranch(
+              billData.cart,
+              billData.discount,
+              billData.status,
+              billData.paymentMethod,
+              {
+                phone: billData.customerPhone || '',
+                name: billData.customerName || 'Walk-in Customer',
+                address: 'Offline Customer'
+              }
+            )
           }
         } catch (err) {
           remainingBills.push(billData)
@@ -761,7 +808,7 @@ export default function POS() {
         }
       }
 
-      await syncToParallelBranch(cart, discount, status, paymentMethod)
+      await syncToParallelBranch(cart, discount, status, paymentMethod, customerForCredit || null)
     }
 
     if (cid && paymentMethod === 'credit' && status === 'completed') {
@@ -921,6 +968,7 @@ export default function POS() {
     }
   }
 
+  // 🔥 FIXED: Use table layout for perfect alignment, footer centered
   const printReceiptWindow = (billData = lastBill) => {
     if (!billData) return
     const s = billSettings || {}
@@ -948,6 +996,19 @@ export default function POS() {
     const cashTenderedVal = paymentMethodVal === 'cash' ? (billData.cashTendered || billTotal) : billTotal
     const qrText = `INV:${s.bill_number_prefix || 'INV-'}${receiptId}|Total:${billTotal.toFixed(2)}|Date:${receiptDate}`
     const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(qrText)}`
+
+    // Generate table rows
+    const itemsRowsHTML = validItems.map(item => `
+      <tr>
+        <td class="item-name" style="font-weight:800; padding:2px 0;">${item.name}</td>
+      </tr>
+      <tr>
+        <td style="width:30%; text-align:left;">${Number(item.originalPrice || item.price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+        <td style="width:25%; text-align:right;">${Number(item.price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+        <td style="width:15%; text-align:center;">${item.qty}</td>
+        <td style="width:30%; text-align:right; font-weight:800;">${Number(item.price * item.qty).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+      </tr>
+    `).join('')
 
     const receiptHTML = `
       <div style="
@@ -991,28 +1052,26 @@ export default function POS() {
         <div style="border-bottom: 2px dashed #000; margin: 8px 0;"></div>
 
         ${s.show_table_headers !== false ? `
-        <div style="display: flex; justify-content: space-between; font-weight: 900; font-size: ${fontBody}px; margin-bottom: 4px;">
-          <div style="width: 32%; text-align: left;">උපරිම සිල්ලර මිල</div>
-          <div style="width: 24%; text-align: right;">Rate</div>
-          <div style="width: 16%; text-align: center;">Qty</div>
-          <div style="width: 28%; text-align: right;">Amount</div>
-        </div>
-        <div style="border-bottom: 2px dashed #000; margin: 6px 0;"></div>
-        ` : ''}
-
-        <div style="margin-top: 6px;">
-          ${validItems.map(item => `
-            <div style="margin-bottom: 8px;">
-              <div style="font-weight: 800; font-size: ${fontBody + 1}px; margin-bottom: 2px;">${item.name}</div>
-              <div style="display: flex; justify-content: space-between; font-size: ${fontBody}px; font-weight: 600;">
-                <div style="width: 32%; text-align: left;">${Number(item.originalPrice || item.price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
-                <div style="width: 24%; text-align: right;">${Number(item.price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
-                <div style="width: 16%; text-align: center;">${item.qty}</div>
-                <div style="width: 28%; text-align: right; font-weight: 800;">${Number(item.price * item.qty).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
-              </div>
-            </div>
-          `).join('')}
-        </div>
+        <table style="width:100%; border-collapse: collapse; table-layout: fixed; font-size: ${fontBody}px;">
+          <thead>
+            <tr>
+              <th style="width:30%; text-align:left; font-weight:900; padding:2px 0;">උපරිම<br/>සිල්ලර<br/>මිල</th>
+              <th style="width:25%; text-align:right; font-weight:900; padding:2px 0;">Rate</th>
+              <th style="width:15%; text-align:center; font-weight:900; padding:2px 0;">Qty</th>
+              <th style="width:30%; text-align:right; font-weight:900; padding:2px 0;">Amount</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${itemsRowsHTML}
+          </tbody>
+        </table>
+        ` : `
+        <table style="width:100%; border-collapse: collapse; table-layout: fixed; font-size: ${fontBody}px;">
+          <tbody>
+            ${itemsRowsHTML}
+          </tbody>
+        </table>
+        `}
 
         <div style="border-bottom: 2px dashed #000; margin: 8px 0;"></div>
 
@@ -1061,12 +1120,18 @@ export default function POS() {
         </div>` : ''}
 
         ${s.show_footer !== false ? `
-        <div style="text-align: center; font-size: ${fontFooter}px; margin-top: 10px; font-weight: 700; white-space: pre-wrap;">${s.footer_text || 'Thank You! Come Again...'}\\n${s.footer_text_sinhala || 'ස්තුතියි! නැවත එන්න...'}</div>` : ''}
+        <div style="text-align: center; font-size: ${fontFooter}px; margin-top: 10px; font-weight: 700;">
+          <div>${s.footer_text || 'Thank You! Come Again...'}</div>
+          <div>${s.footer_text_sinhala || 'ස්තුතියි! නැවත එන්න...'}</div>
+        </div>` : ''}
         
         <div style="border-bottom: 1px dotted #000; margin-top: 12px;"></div>
 
         ${s.show_watermark !== false ? `
-        <div style="text-align: center; font-size: ${fontWatermark}px; margin-top: 8px; color: #444;">Powered by Nishadi Enterprise Suite.<br/>Design & Developed by Ceylon Digi Solutions</div>` : ''}
+        <div style="text-align: center; font-size: ${fontWatermark}px; margin-top: 8px; color: #444;">
+          <div>Powered by Nishadi Enterprise Suite.</div>
+          <div>Design & Developed by Ceylon Digi Solutions</div>
+        </div>` : ''}
       </div>
     `
 
@@ -1094,6 +1159,8 @@ export default function POS() {
               @page { margin: 0; size: ${s.paper_size || '80mm'} auto; }
               body { margin: 0; padding: 0; }
             }
+            table { page-break-inside: avoid; }
+            tr { page-break-inside: avoid; }
           </style>
         </head>
         <body>${receiptHTML}</body>
@@ -1109,6 +1176,95 @@ export default function POS() {
       }, 400)
     }
   }
+
+  // ===== Mobile navigation helpers =====
+  const goToBilling = () => {
+    setMobileView('billing')
+  }
+  const goToCheckout = () => {
+    setMobileView('checkout')
+  }
+  const goBackToProducts = () => {
+    setMobileView('products')
+  }
+  const goBackToBilling = () => {
+    setMobileView('billing')
+  }
+
+  // ===== Components =====
+  
+  // Define CheckoutSection first to avoid ReferenceError
+  const CheckoutSection = () => (
+    <div>
+      <div className="mb-4">
+        <div className="text-sm font-medium mb-2 text-gray-900 dark:text-white">💳 Payment Method</div>
+        <div className="grid grid-cols-3 gap-2">
+          {[
+            { method: 'cash', label: 'Cash', color: 'bg-green-600 dark:bg-green-700' },
+            { method: 'card', label: 'Card', color: 'bg-blue-600 dark:bg-blue-700' },
+            { method: 'cheque', label: 'Cheque', color: 'bg-purple-600 dark:bg-purple-700' },
+            { method: 'credit', label: 'Credit', color: 'bg-orange-500 dark:bg-orange-600' },
+            { method: 'bank_transfer', label: 'Bank', color: 'bg-teal-600 dark:bg-teal-700' }
+          ].map(pm => (
+            <button
+              key={pm.method}
+              className={`px-3 py-2 rounded-lg text-sm sm:text-base font-medium transition-all hover:scale-105 ${
+                paymentMethod === pm.method ? `${pm.color} text-white` : 'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 border border-transparent dark:border-gray-600'
+              }`}
+              onClick={() => setPaymentMethod(pm.method)}
+            >
+              {pm.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {paymentMethod === 'cash' && (
+        <div className="mb-3">
+          <label className="block text-sm font-medium mb-1 text-gray-900 dark:text-white">Cash Tendered (මුදල් ලැබුණි)</label>
+          <input
+            type="number"
+            className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white text-base font-bold outline-none"
+            placeholder="Enter Cash Given"
+            value={cashTendered}
+            onChange={e => setCashTendered(e.target.value)}
+          />
+          {tenderedNum > 0 && (
+            <div className="mt-1 text-sm font-bold text-green-600 dark:text-green-400">
+              Balance to Return (ඉතුරු මුදල): {currency}{balanceDue.toFixed(2)}
+            </div>
+          )}
+        </div>
+      )}
+
+      {paymentMethod === 'cheque' && (
+        <div className="grid grid-cols-2 gap-2 mb-3">
+          <input type="text" className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white text-sm outline-none" placeholder="Cheque Number" value={chequeNumber} onChange={e => setChequeNumber(e.target.value)} />
+          <input type="date" className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white text-sm outline-none" value={chequeDate} onChange={e => setChequeDate(e.target.value)} />
+        </div>
+      )}
+      {paymentMethod === 'bank_transfer' && (
+        <div className="mb-3">
+          <input type="text" className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white text-sm outline-none" placeholder="Bank Reference" value={bankReference} onChange={e => setBankReference(e.target.value)} />
+        </div>
+      )}
+      {paymentMethod === 'credit' && (
+        <div className="mb-3">
+          <label className="block text-sm font-medium mb-1 text-gray-900 dark:text-white">Due Date</label>
+          <input type="date" className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white text-sm outline-none" value={creditDueDate} onChange={e => setCreditDueDate(e.target.value)} />
+        </div>
+      )}
+
+      <div className="flex gap-2 mt-auto">
+        <button className="flex-1 px-3 py-3 bg-green-600 text-white rounded-lg font-bold hover:bg-green-700 disabled:opacity-50" onClick={() => checkout('completed')} disabled={cart.length === 0}>
+          ✅ Checkout ({totalItemCount})
+        </button>
+        <button className="flex-1 px-3 py-3 bg-yellow-500 text-white rounded-lg font-bold hover:bg-yellow-600 disabled:opacity-50" onClick={() => checkout('hold')} disabled={cart.length === 0}>
+          ⏸️ Hold
+        </button>
+      </div>
+    </div>
+  )
 
   const productPanel = (
     <div className="bg-white dark:bg-gray-800 text-gray-900 dark:text-white rounded-xl shadow-2xl p-4 flex flex-col space-y-3 overflow-hidden min-h-0 flex-1">
@@ -1148,6 +1304,9 @@ export default function POS() {
                   onClick={() => addToCart(p)}
                 >
                   {inCartQty > 0 && <span className="absolute top-2 right-2 bg-blue-600 text-white font-extrabold text-xs px-2 py-0.5 rounded-full">x {inCartQty}</span>}
+                  {isOutOfStock && (
+                    <span className="absolute top-2 left-2 bg-red-500 text-white text-[10px] px-2 py-0.5 rounded-full font-bold">Out of Stock</span>
+                  )}
                   <div>
                     <div className="font-semibold text-sm sm:text-base mt-2 line-clamp-2">{p.name}</div>
                     <div className="text-[10px] text-gray-500 dark:text-gray-400 mt-0.5 font-mono">{p.sku || 'N/A'}</div>
@@ -1186,7 +1345,7 @@ export default function POS() {
 
   const billingTerminal = (
     <div className="bg-white dark:bg-gray-800 text-gray-900 dark:text-white rounded-xl shadow-2xl p-4 flex flex-col overflow-y-auto flex-1">
-      {isMobile && <button onClick={() => setMobileView('products')} className="mb-3 px-4 py-2 bg-gray-200 dark:bg-gray-700 rounded-lg self-start">← Back</button>}
+      {isMobile && <button onClick={goBackToProducts} className="mb-3 px-4 py-2 bg-gray-200 dark:bg-gray-700 rounded-lg self-start">← Back to Products</button>}
 
       <div className="relative mb-3" ref={customerDropdownRef}>
         <div className="flex items-center gap-2">
@@ -1275,73 +1434,23 @@ export default function POS() {
         <div className="flex justify-between text-lg sm:text-xl font-bold mt-1 pt-1 border-t border-gray-300 dark:border-gray-500"><span>Total</span> <span>{currency}{final.toFixed(2)}</span></div>
       </div>
 
-      <div className="mb-4">
-        <div className="text-sm font-medium mb-2 text-gray-900 dark:text-white">💳 Payment Method</div>
-        <div className="grid grid-cols-3 gap-2">
-          {[
-            { method: 'cash', label: 'Cash', color: 'bg-green-600 dark:bg-green-700' },
-            { method: 'card', label: 'Card', color: 'bg-blue-600 dark:bg-blue-700' },
-            { method: 'cheque', label: 'Cheque', color: 'bg-purple-600 dark:bg-purple-700' },
-            { method: 'credit', label: 'Credit', color: 'bg-orange-500 dark:bg-orange-600' },
-            { method: 'bank_transfer', label: 'Bank', color: 'bg-teal-600 dark:bg-teal-700' }
-          ].map(pm => (
-            <button
-              key={pm.method}
-              className={`px-3 py-2 rounded-lg text-sm sm:text-base font-medium transition-all hover:scale-105 ${
-                paymentMethod === pm.method ? `${pm.color} text-white` : 'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 border border-transparent dark:border-gray-600'
-              }`}
-              onClick={() => setPaymentMethod(pm.method)}
-            >
-              {pm.label}
-            </button>
-          ))}
-        </div>
-      </div>
+      {!isMobile && <CheckoutSection />}
 
-      {paymentMethod === 'cash' && (
-        <div className="mb-3">
-          <label className="block text-sm font-medium mb-1 text-gray-900 dark:text-white">Cash Tendered (මුදල් ලැබුණි)</label>
-          <input
-            type="number"
-            className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white text-base font-bold outline-none"
-            placeholder="Enter Cash Given"
-            value={cashTendered}
-            onChange={e => setCashTendered(e.target.value)}
-          />
-          {tenderedNum > 0 && (
-            <div className="mt-1 text-sm font-bold text-green-600 dark:text-green-400">
-              Balance to Return (ඉතුරු මුදල): {currency}{balanceDue.toFixed(2)}
-            </div>
-          )}
-        </div>
-      )}
-
-      {paymentMethod === 'cheque' && (
-        <div className="grid grid-cols-2 gap-2 mb-3">
-          <input type="text" className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white text-sm outline-none" placeholder="Cheque Number" value={chequeNumber} onChange={e => setChequeNumber(e.target.value)} />
-          <input type="date" className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white text-sm outline-none" value={chequeDate} onChange={e => setChequeDate(e.target.value)} />
-        </div>
-      )}
-      {paymentMethod === 'bank_transfer' && (
-        <div className="mb-3">
-          <input type="text" className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white text-sm outline-none" placeholder="Bank Reference" value={bankReference} onChange={e => setBankReference(e.target.value)} />
-        </div>
-      )}
-      {paymentMethod === 'credit' && (
-        <div className="mb-3">
-          <label className="block text-sm font-medium mb-1 text-gray-900 dark:text-white">Due Date</label>
-          <input type="date" className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white text-sm outline-none" value={creditDueDate} onChange={e => setCreditDueDate(e.target.value)} />
-        </div>
-      )}
-
-      <div className="flex gap-2 mt-auto">
-        <button className="flex-1 px-3 py-3 bg-green-600 text-white rounded-lg font-bold hover:bg-green-700 disabled:opacity-50" onClick={() => checkout('completed')} disabled={cart.length === 0}>
-          ✅ Checkout ({totalItemCount})
+      {isMobile && cart.length > 0 && (
+        <button
+          onClick={goToCheckout}
+          className="mt-4 w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-xl shadow-lg transition"
+        >
+          Go to Checkout
         </button>
-        <button className="flex-1 px-3 py-3 bg-yellow-500 text-white rounded-lg font-bold hover:bg-yellow-600 disabled:opacity-50" onClick={() => checkout('hold')} disabled={cart.length === 0}>
-          ⏸️ Hold
-        </button>
-      </div>
+      )}
+    </div>
+  )
+
+  const checkoutTerminal = (
+    <div className="bg-white dark:bg-gray-800 text-gray-900 dark:text-white rounded-xl shadow-2xl p-4 flex flex-col overflow-y-auto flex-1">
+      <button onClick={goBackToBilling} className="mb-3 px-4 py-2 bg-gray-200 dark:bg-gray-700 rounded-lg self-start">← Back to Billing</button>
+      <CheckoutSection />
     </div>
   )
 
@@ -1358,13 +1467,18 @@ export default function POS() {
           <div className="flex flex-col h-[calc(100vh-120px)]">
             <div className="flex-1 overflow-hidden flex flex-col">{productPanel}</div>
             <div className="p-3 flex-shrink-0">
-              <button className="w-full py-4 bg-blue-600 text-white rounded-xl font-bold text-lg" onClick={() => setMobileView('billing')}>
+              <button className="w-full py-4 bg-blue-600 text-white rounded-xl font-bold text-lg" onClick={goToBilling}>
                 🛒 Go to Counter ({totalItemCount})
               </button>
             </div>
           </div>
         )}
-        {isMobile && mobileView === 'billing' && <div className="flex flex-col h-[calc(100vh-120px)]">{billingTerminal}</div>}
+        {isMobile && mobileView === 'billing' && (
+          <div className="flex flex-col h-[calc(100vh-120px)]">{billingTerminal}</div>
+        )}
+        {isMobile && mobileView === 'checkout' && (
+          <div className="flex flex-col h-[calc(100vh-120px)]">{checkoutTerminal}</div>
+        )}
 
         {isScannerOpen && (
           <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4 animate-fadeIn">

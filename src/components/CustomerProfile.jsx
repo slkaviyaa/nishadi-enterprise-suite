@@ -50,14 +50,61 @@ export default function CustomerProfile({ customerId }) {
 
   const loadTransactions = async () => {
     try {
-      let query = supabase.from('credit_transactions')
+      // Fetch credit_transactions (credit purchases, payments, returns)
+      let creditQuery = supabase.from('credit_transactions')
         .select('*')
         .eq('customer_id', customerId)
-        .order('created_at', { ascending: false })
-      if (modeFilter !== 'all') query = query.eq('payment_mode', modeFilter)
-      const { data, error } = await query
-      if (!error) setTransactions(data || [])
-    } catch (err) {}
+      if (branch) creditQuery = creditQuery.eq('branch_id', branch)
+      if (modeFilter !== 'all') creditQuery = creditQuery.eq('payment_mode', modeFilter)
+      const { data: creditTrans, error: creditErr } = await creditQuery
+      if (creditErr) console.error(creditErr)
+
+      // Fetch orders as transactions (sales)
+      let orderQuery = supabase.from('orders')
+        .select('id, total, created_at, payment_method, status')
+        .eq('customer_id', customerId)
+      if (branch) orderQuery = orderQuery.eq('branch_id', branch)
+      if (modeFilter !== 'all') {
+        if (modeFilter === 'return') {
+          // For 'return' filter, orders don't have payment_mode 'return', so exclude orders entirely
+          orderQuery = orderQuery.eq('id', '00000000-0000-0000-0000-000000000000') // dummy to get none
+        } else {
+          orderQuery = orderQuery.eq('payment_method', modeFilter)
+        }
+      }
+      const { data: ordersData, error: orderErr } = await orderQuery
+      if (orderErr) console.error(orderErr)
+
+      // Convert orders to transaction-like objects
+      const orderTransactions = (ordersData || []).map(o => ({
+        id: o.id,
+        created_at: o.created_at,
+        type: 'sale',
+        amount: o.total,
+        payment_mode: o.payment_method,
+        note: `Order #${o.id.slice(0,6)}`,
+        isOrder: true
+      }))
+
+      // Convert credit transactions
+      const creditTransFormatted = (creditTrans || []).map(t => ({
+        id: t.id,
+        created_at: t.created_at,
+        type: t.type,
+        amount: t.amount,
+        payment_mode: t.payment_mode,
+        note: t.note,
+        isOrder: false
+      }))
+
+      // Merge and sort by date descending
+      const allTransactions = [...orderTransactions, ...creditTransFormatted]
+        .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
+
+      setTransactions(allTransactions)
+    } catch (err) {
+      console.error(err)
+    }
   }
 
   const loadOrders = async () => {
@@ -85,6 +132,7 @@ export default function CustomerProfile({ customerId }) {
         setOrders(formattedOrders)
       }
     } catch (err) {
+      console.error(err)
     } finally {
       setLoading(false)
     }
@@ -92,23 +140,38 @@ export default function CustomerProfile({ customerId }) {
 
   const loadAnalytics = async () => {
     try {
-      let query = supabase.from('orders').select('total, payment_method').eq('customer_id', customerId).in('status', ['completed', 'partially_returned'])
+      let query = supabase.from('orders')
+        .select('id, total, payment_method, status, order_items(quantity, returned_quantity, price)')
+        .eq('customer_id', customerId)
+        .in('status', ['completed', 'partially_returned'])
       if (branch) query = query.eq('branch_id', branch)
-      
+
       const { data } = await query
       if (data) {
-        const total = data.reduce((sum, o) => sum + o.total, 0)
-        setTotalRevenue(total)
-        setAvgBill(data.length > 0 ? (total / data.length).toFixed(2) : 0)
-
+        let totalRevenue = 0
         const split = {}
-        data.forEach(o => {
-          const method = o.payment_method || 'cash'
-          split[method] = (split[method] || 0) + o.total
+
+        data.forEach(order => {
+          // Net revenue = sum of (price * (quantity - returned_quantity)) for all items
+          let orderRevenue = 0
+          ;(order.order_items || []).forEach(item => {
+            const effectiveQty = Math.max(0, item.quantity - (item.returned_quantity || 0))
+            orderRevenue += (item.price || 0) * effectiveQty
+          })
+
+          totalRevenue += orderRevenue
+
+          const method = order.payment_method || 'cash'
+          split[method] = (split[method] || 0) + orderRevenue
         })
+
+        setTotalRevenue(totalRevenue)
+        setAvgBill(data.length > 0 ? (totalRevenue / data.length).toFixed(2) : 0)
         setPaymentSplit(split)
       }
-    } catch (err) {}
+    } catch (err) {
+      console.error(err)
+    }
   }
 
   // 🖨️ EXACT DESIGN RECEIPT PRINTING FOR CUSTOMER BILL HISTORY 
@@ -342,6 +405,13 @@ export default function CustomerProfile({ customerId }) {
     let totalRefund = 0
     let allItemsReturned = true
 
+    // Find the original order to check payment method
+    const { data: originalOrder } = await supabase
+      .from('orders')
+      .select('payment_method')
+      .eq('id', orderId)
+      .single()
+
     for (const item of items) {
       const newReturnedQty = item.returned_quantity + item.returnQty
       
@@ -359,15 +429,26 @@ export default function CustomerProfile({ customerId }) {
     if (totalRefund > 0) {
       const newStatus = allItemsReturned ? 'returned' : 'partially_returned'
       await supabase.from('orders').update({ status: newStatus }).eq('id', orderId)
-      
-      await supabase.from('customers').update({ total_credit: customer.total_credit - totalRefund }).eq('id', customerId)
+
+      // Cash return: no credit adjustment
+      // Credit return: reduce customer's total_credit
+      if (originalOrder?.payment_method === 'credit') {
+        const currentCredit = customer?.total_credit || 0
+        await supabase.from('customers').update({ total_credit: currentCredit - totalRefund }).eq('id', customerId)
+        setCustomer(prev => ({ ...prev, total_credit: prev.total_credit - totalRefund }))
+      }
+
+      // Record return transaction
       await supabase.from('credit_transactions').insert({
-        customer_id: customerId, branch_id: branch, amount: totalRefund,
-        type: 'payment', note: reason ? `Return: ${reason}` : `Return for order #${orderId.slice(0,6)}`,
+        customer_id: customerId,
+        branch_id: branch,
+        amount: totalRefund,
+        type: 'return',
+        note: reason ? `Return: ${reason}` : `Return for order #${orderId.slice(0,6)}`,
         payment_mode: 'return'
       })
+
       showToast(`Return processed! Refund: Rs. ${totalRefund}`, 'success')
-      setCustomer(prev => ({ ...prev, total_credit: prev.total_credit - totalRefund }))
       loadTransactions()
       loadOrders()
       loadAnalytics()
@@ -443,7 +524,14 @@ export default function CustomerProfile({ customerId }) {
               {loading ? <tr><td colSpan={5} className="p-4 text-center">Loading...</td></tr> : transactions.length === 0 ? <tr><td colSpan={5} className="p-4 text-center opacity-50">No transactions found</td></tr> : transactions.map(t => (
                 <tr key={t.id} className="border-b border-gray-100 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition">
                   <td className="p-3 text-sm">{new Date(t.created_at).toLocaleDateString()}</td>
-                  <td className="p-3 text-sm"><span className={`px-2 py-1 rounded-full text-xs font-medium ${t.type === 'purchase' ? 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300' : 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300'}`}>{t.type}</span></td>
+                  <td className="p-3 text-sm">
+                    <span className={`px-2 py-1 rounded-full text-xs font-medium capitalize ${
+                      t.type === 'sale' ? 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300' :
+                      t.type === 'return' ? 'bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-300' :
+                      t.type === 'purchase' ? 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300' :
+                      'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300'
+                    }`}>{t.type}</span>
+                  </td>
                   <td className="p-3 text-sm font-semibold">Rs. {t.amount?.toLocaleString()}</td>
                   <td className="p-3 text-sm capitalize">{t.payment_mode}</td>
                   <td className="p-3 text-sm opacity-70">{t.note || '-'}</td>

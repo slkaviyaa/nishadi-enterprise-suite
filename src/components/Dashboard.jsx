@@ -15,6 +15,7 @@ export default function Dashboard() {
 
   useEffect(() => {
     if (!currentBranch) return
+
     // Stats
     supabase.from('orders').select('total').eq('branch_id', currentBranch).eq('status','completed')
       .gte('created_at', new Date().toISOString().split('T')[0])
@@ -36,10 +37,32 @@ export default function Dashboard() {
       .lt('due_date', new Date().toISOString().split('T')[0])
       .order('due_date').then(({ data }) => setOverdueCredits(data || []))
     
-    // Low stock items
-    supabase.rpc('get_low_stock_items', { bid: currentBranch })
-      .then(({ data }) => setLowStockItems(data || []))
-  }, [currentBranch])
+    // 🔥 FIXED: Low stock items - filter active & not deleted
+    const lowStockThreshold = settings?.low_stock_threshold || 5; // threshold එක settings එකෙන් හෝ default 5
+
+    supabase.from('branch_products')
+      .select(`
+        id,
+        stock_quantity,
+        products:products!inner(name)
+      `)
+      .eq('branch_id', currentBranch)
+      .eq('is_active', true)                  // Active products only
+      .is('products.deleted_at', null)        // Product deleted_at NULL (not deleted)
+      .lt('stock_quantity', lowStockThreshold) // Stock එක threshold ට වඩා අඩු
+      .then(({ data, error }) => {
+        if (error) {
+          console.error('Low stock query error:', error)
+          setLowStockItems([])
+          return
+        }
+        const mapped = (data || []).map(item => ({
+          product_name: item.products?.name || 'Unknown',
+          stock_quantity: item.stock_quantity
+        }))
+        setLowStockItems(mapped)
+      })
+  }, [currentBranch, settings])
 
   const currency = settings?.currency_symbol || 'Rs. '
   const shortcuts = [
