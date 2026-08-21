@@ -405,7 +405,7 @@ export default function POS() {
     if (newQty < 1) return
     const item = cart.find(i => i.id === id)
     const product = products.find(p => p.id === id)
-    if (item && item.preventOutOfStock && (!product || newQty > product.stock)) {
+    if (item && item.preventOutOfStock && (!product || newQty > product?.stock)) {
       showToast(`ඔබට ${newQty} ක් ලබාදිය නොහැක. දැනට ඇත්තේ ${product?.stock ?? 0} යි!`, 'error')
       return
     }
@@ -438,7 +438,7 @@ export default function POS() {
   const handleUpdateCartItem = () => {
     if (!selectedCartItem) return
     const product = products.find(p => p.id === selectedCartItem.id)
-    if (selectedCartItem.preventOutOfStock && (!product || editQty > product.stock)) {
+    if (selectedCartItem.preventOutOfStock && (!product || editQty > product?.stock)) {
       showToast(`⚠️ ප්‍රමාණය තොගයට වඩා වැඩියි. (ඇත්තේ ${product?.stock ?? 0} යි)`, 'error')
       return
     }
@@ -968,20 +968,20 @@ export default function POS() {
     }
   }
 
-  // 🔥 FIXED: Use table layout for perfect alignment, footer centered
+  // ========== Print Receipt Window ==========
   const printReceiptWindow = (billData = lastBill) => {
     if (!billData) return
     const s = billSettings || {}
     const is58 = s.paper_size === '58mm'
     const printableWidthPx = is58 ? 384 : 576
 
-    const fontGreeting = (s.font_size_greeting || 14) * (is58 ? 1.5 : 1.8)
-    const fontHeader = (s.font_size_header || 20) * (is58 ? 1.6 : 2.0)
-    const fontContact = (s.font_size_contact || 12) * (is58 ? 1.3 : 1.5)
-    const fontBody = (s.font_size_body || 12) * (is58 ? 1.4 : 1.6)
-    const fontTotal = (s.font_size_total || 15) * (is58 ? 1.6 : 1.9)
-    const fontFooter = (s.font_size_footer || 12) * (is58 ? 1.3 : 1.5)
-    const fontWatermark = (s.font_size_watermark || 9) * (is58 ? 1.1 : 1.3)
+    const fontGreeting = (s.font_size_greeting || 14) * (is58 ? 1.5 : 2.2)
+    const fontHeader = (s.font_size_header || 20) * (is58 ? 1.6 : 3.0)
+    const fontContact = (s.font_size_contact || 12) * (is58 ? 1.3 : 2.0)
+    const fontBody = (s.font_size_body || 12) * (is58 ? 1.4 : 2.2)
+    const fontTotal = (s.font_size_total || 15) * (is58 ? 1.6 : 2.6)
+    const fontFooter = (s.font_size_footer || 12) * (is58 ? 1.3 : 2.2)
+    const fontWatermark = (s.font_size_watermark || 9) * (is58 ? 1.1 : 1.8)
 
     const billSubtotal = billData.items.reduce((sum, i) => sum + ((i.originalPrice || i.price) * i.qty), 0)
     const billDiscount = billData.discount || (billSubtotal - billData.total)
@@ -997,10 +997,10 @@ export default function POS() {
     const qrText = `INV:${s.bill_number_prefix || 'INV-'}${receiptId}|Total:${billTotal.toFixed(2)}|Date:${receiptDate}`
     const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(qrText)}`
 
-    // Generate table rows
+    // Generate table rows (HTML)
     const itemsRowsHTML = validItems.map(item => `
       <tr>
-        <td class="item-name" style="font-weight:800; padding:2px 0;">${item.name}</td>
+        <td colspan="4" style="font-weight:800; padding:2px 0;">${item.name}</td>
       </tr>
       <tr>
         <td style="width:30%; text-align:left;">${Number(item.originalPrice || item.price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
@@ -1014,6 +1014,8 @@ export default function POS() {
       <div style="
         width: 100%;
         max-width: ${printableWidthPx}px;
+        margin: 0 auto;
+        text-align: center;
         box-sizing: border-box;
         padding-top: ${s.margin_top !== undefined ? s.margin_top : 10}px;
         padding-bottom: ${s.margin_bottom !== undefined ? s.margin_bottom : 10}px;
@@ -1193,7 +1195,6 @@ export default function POS() {
 
   // ===== Components =====
   
-  // Define CheckoutSection first to avoid ReferenceError
   const CheckoutSection = () => (
     <div>
       <div className="mb-4">
