@@ -48,9 +48,10 @@ export default function CustomerProfile({ customerId }) {
     loadAnalytics()
   }, [customerId, branch, modeFilter])
 
+  // 🔁 FIXED: Avoid duplicate credit sales in transactions
   const loadTransactions = async () => {
     try {
-      // Fetch credit_transactions (credit purchases, payments, returns)
+      // Credit transactions fetch (purchases, payments, returns)
       let creditQuery = supabase.from('credit_transactions')
         .select('*')
         .eq('customer_id', customerId)
@@ -59,23 +60,30 @@ export default function CustomerProfile({ customerId }) {
       const { data: creditTrans, error: creditErr } = await creditQuery
       if (creditErr) console.error(creditErr)
 
-      // Fetch orders as transactions (sales)
+      // Orders as transactions (sales)
       let orderQuery = supabase.from('orders')
         .select('id, total, created_at, payment_method, status')
         .eq('customer_id', customerId)
       if (branch) orderQuery = orderQuery.eq('branch_id', branch)
+      
       if (modeFilter !== 'all') {
         if (modeFilter === 'return') {
-          // For 'return' filter, orders don't have payment_mode 'return', so exclude orders entirely
-          orderQuery = orderQuery.eq('id', '00000000-0000-0000-0000-000000000000') // dummy to get none
+          // No orders for return filter
+          orderQuery = orderQuery.eq('id', '00000000-0000-0000-0000-000000000000')
+        } else if (modeFilter === 'credit') {
+          // No orders for credit filter (credit sales already in credit_transactions)
+          orderQuery = orderQuery.eq('id', '00000000-0000-0000-0000-000000000000')
         } else {
           orderQuery = orderQuery.eq('payment_method', modeFilter)
         }
+      } else {
+        // For 'all': exclude credit orders to avoid duplication with credit_transactions
+        orderQuery = orderQuery.neq('payment_method', 'credit')
       }
+
       const { data: ordersData, error: orderErr } = await orderQuery
       if (orderErr) console.error(orderErr)
 
-      // Convert orders to transaction-like objects
       const orderTransactions = (ordersData || []).map(o => ({
         id: o.id,
         created_at: o.created_at,
@@ -86,7 +94,6 @@ export default function CustomerProfile({ customerId }) {
         isOrder: true
       }))
 
-      // Convert credit transactions
       const creditTransFormatted = (creditTrans || []).map(t => ({
         id: t.id,
         created_at: t.created_at,
@@ -97,7 +104,6 @@ export default function CustomerProfile({ customerId }) {
         isOrder: false
       }))
 
-      // Merge and sort by date descending
       const allTransactions = [...orderTransactions, ...creditTransFormatted]
         .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
 
@@ -152,7 +158,6 @@ export default function CustomerProfile({ customerId }) {
         const split = {}
 
         data.forEach(order => {
-          // Net revenue = sum of (price * (quantity - returned_quantity)) for all items
           let orderRevenue = 0
           ;(order.order_items || []).forEach(item => {
             const effectiveQty = Math.max(0, item.quantity - (item.returned_quantity || 0))
@@ -174,197 +179,207 @@ export default function CustomerProfile({ customerId }) {
     }
   }
 
-  // 🖨️ EXACT DESIGN RECEIPT PRINTING FOR CUSTOMER BILL HISTORY 
+  // 🖨️ POS-style receipt printing (table layout, same font scaling)
   const printOrder = (order) => {
     const s = billSettings || {};
     const currency = 'Rs. ';
+    const is58 = s.paper_size === '58mm';
+    const printableWidthPx = is58 ? 384 : 576;
+
+    const fontGreeting = (s.font_size_greeting || 14) * (is58 ? 1.5 : 2.2)
+    const fontHeader = (s.font_size_header || 20) * (is58 ? 1.6 : 3.0)
+    const fontContact = (s.font_size_contact || 12) * (is58 ? 1.3 : 2.0)
+    const fontBody = (s.font_size_body || 12) * (is58 ? 1.4 : 2.2)
+    const fontTotal = (s.font_size_total || 15) * (is58 ? 1.6 : 2.6)
+    const fontFooter = (s.font_size_footer || 12) * (is58 ? 1.3 : 2.2)
+    const fontWatermark = (s.font_size_watermark || 9) * (is58 ? 1.1 : 1.8)
+
     const validItems = order.order_items || [];
-    
     const returnedItems = validItems.filter(i => i.returned_quantity > 0);
     const billSubtotal = validItems.reduce((sum, i) => sum + (i.price * i.quantity), 0);
-    const billDiscount = order.discount || (billSubtotal - order.total); 
+    const billDiscount = order.discount || (billSubtotal - order.total);
     const totalRefund = returnedItems.reduce((sum, i) => sum + (i.price * i.returned_quantity), 0);
-    
     const receiptId = order.id.slice(0,6).toUpperCase();
     const receiptDate = new Date(order.created_at).toLocaleString();
-    const hasCustomer = !!customer;
-    const custName = customer?.name;
-    const custPhone = customer?.phone;
+    const custName = customer?.name || '';
+    const custPhone = customer?.phone || '';
     const totalQty = validItems.reduce((sum, i) => sum + i.quantity, 0);
     const billTotal = order.total;
     const paymentMethod = order.payment_method || 'CASH';
 
-    const receiptHTML = `
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <style>
-          @page { margin: 0; size: ${s.paper_size || '80mm'} auto; } 
-          body { 
-            font-family: 'Courier New', Courier, monospace, sans-serif; 
-            width: ${s.paper_size === '58mm' ? '48mm' : '72mm'}; 
-            margin: 0 auto; 
-            padding-top: ${s.margin_top !== undefined ? s.margin_top : 10}px;
-            padding-bottom: ${s.margin_bottom !== undefined ? s.margin_bottom : 10}px;
-            padding-left: ${s.margin_left !== undefined ? s.margin_left : 10}px;
-            padding-right: ${s.margin_right !== undefined ? s.margin_right : 10}px;
-            color: #000; 
-            font-size: ${s.font_size_body || '12'}px;
-            line-height: 1.4;
-          }
-          .text-center { text-align: center; }
-          .font-bold { font-weight: bold; }
-          .flex { display: flex; justify-content: space-between; align-items: flex-start; }
-          .border-dashed { border-bottom: 1px dashed #000; margin: 6px 0; }
-          .border-dotted { border-bottom: 1px dotted #000; margin: 6px 0; }
-          .item-name { margin-bottom: 2px; }
-          .item-row { display: flex; justify-content: space-between; align-items: center; }
-          
-          .col-mrp { width: 30%; text-align: left; }
-          .col-rate { width: 25%; text-align: right; }
-          .col-qty { width: 15%; text-align: center; }
-          .col-amt { width: 30%; text-align: right; }
-          
-          .greeting { font-size: ${s.font_size_greeting || '14'}px; margin-bottom: 2px; font-weight: bold; }
-          .header { font-size: ${s.font_size_header || '20'}px; margin-bottom: 2px; font-weight: bold; text-transform: uppercase; }
-          .contact { font-size: ${s.font_size_contact || '12'}px; margin-bottom: 8px; white-space: pre-wrap; }
-          .total-row { font-size: ${s.font_size_total || '15'}px; font-weight: bold; margin: 6px 0; }
-          .footer { font-size: ${s.font_size_footer || '12'}px; margin-top: 8px; white-space: pre-wrap; font-weight: bold; }
-          .watermark { font-size: ${s.font_size_watermark || '9'}px; margin-top: 10px; }
-        </style>
-      </head>
-      <body>
-        ${s.show_logo !== false && s.logo_url ? `<div class="text-center" style="margin-bottom: 8px;"><img src="${s.logo_url}" style="width: ${s.logo_size || '60'}px; height: auto; filter: grayscale(100%);" /></div>` : ''}
-        
-        ${s.show_greeting !== false ? `<div class="text-center greeting">${s.greeting_text || 'ආයුබෝවන්'}</div>` : ''}
-        ${s.show_header !== false ? `<div class="text-center header">${s.header_text || 'SHOP NAME'}</div>` : ''}
-        ${s.show_contact !== false ? `<div class="text-center contact">${s.contact_info || 'Address\nPhone'}</div>` : ''}
-        ${s.show_tax_no !== false && s.tax_number ? `<div class="text-center contact" style="margin-bottom: 4px;">VAT/TAX: ${s.tax_number}</div>` : ''}
+    // Build item rows HTML
+    const itemsRowsHTML = validItems.map(item => `
+      <tr>
+        <td colspan="4" style="font-weight:800; padding:2px 0;">${item.name}</td>
+      </tr>
+      <tr>
+        <td style="width:30%; text-align:left;">${Number(item.price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+        <td style="width:25%; text-align:right;">${Number(item.price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+        <td style="width:15%; text-align:center;">${item.quantity}</td>
+        <td style="width:30%; text-align:right; font-weight:800;">${Number(item.price * item.quantity).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+      </tr>
+    `).join('')
 
-        <div style="margin-top: 10px;"></div>
+    const returnedRowsHTML = returnedItems.map(item => `
+      <tr>
+        <td colspan="2" style="text-align:left;">${item.name}</td>
+        <td style="width:20%; text-align:center;">${item.returned_quantity}</td>
+        <td style="width:30%; text-align:right; font-weight:800;">-${Number(item.price * item.returned_quantity).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+      </tr>
+    `).join('')
+
+    const receiptHTML = `
+      <div style="
+        width: 100%;
+        max-width: ${printableWidthPx}px;
+        margin: 0 auto;
+        text-align: center;
+        box-sizing: border-box;
+        padding-top: ${s.margin_top !== undefined ? s.margin_top : 10}px;
+        padding-bottom: ${s.margin_bottom !== undefined ? s.margin_bottom : 10}px;
+        padding-left: ${s.margin_left !== undefined ? s.margin_left : 10}px;
+        padding-right: ${s.margin_right !== undefined ? s.margin_right : 10}px;
+        color: #000000;
+        background-color: #ffffff;
+        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        font-size: ${fontBody}px;
+        line-height: 1.35;
+      ">
+        ${s.show_logo !== false && s.logo_url ? `
+          <div style="text-align: center; margin-bottom: 8px;">
+            <img src="${s.logo_url}" style="width: ${(s.logo_size || 60) * 1.8}px; height: auto; filter: grayscale(100%) contrast(150%); display: inline-block;" />
+          </div>` : ''}
+        
+        ${s.show_greeting !== false ? `<div style="text-align: center; font-size: ${fontGreeting}px; font-weight: bold; margin-bottom: 4px;">${s.greeting_text || 'ආයුබෝවන්'}</div>` : ''}
+        ${s.show_header !== false ? `<div style="text-align: center; font-size: ${fontHeader}px; font-weight: 900; margin-bottom: 4px; text-transform: uppercase;">${s.header_text || 'SHOP NAME'}</div>` : ''}
+        ${s.show_contact !== false ? `<div style="text-align: center; font-size: ${fontContact}px; margin-bottom: 8px; white-space: pre-wrap;">${s.contact_info || 'Address\\nPhone'}</div>` : ''}
+        ${s.show_tax_no !== false && s.tax_number ? `<div style="text-align: center; font-size: ${fontContact}px; margin-bottom: 6px; font-weight: bold;">VAT/TAX: ${s.tax_number}</div>` : ''}
+
+        <div style="margin-top: 8px;"></div>
 
         ${(s.show_bill_no !== false || s.show_date_time !== false) ? `
-        <div class="flex">
-          ${s.show_bill_no !== false ? `<div>Bill ${s.bill_number_prefix || 'RBR-'}${receiptId}</div>` : '<div></div>'}
+        <div style="display: flex; justify-content: space-between; font-weight: 600; font-size: ${fontBody}px; margin-bottom: 4px;">
+          ${s.show_bill_no !== false ? `<div>${s.bill_number_prefix || 'Bill '}${receiptId}</div>` : '<div></div>'}
           ${s.show_date_time !== false ? `<div>${receiptDate}</div>` : ''}
         </div>` : ''}
 
-        ${s.show_customer_info !== false && hasCustomer ? `
-        <div style="margin-top: 2px;">
-          ${custName ? `<div>Customer: "${custName}"</div>` : ''}
+        ${s.show_customer_info !== false && custName ? `
+        <div style="margin-top: 2px; font-size: ${fontBody}px; font-weight: 600;">
+          <div>Customer : "${custName}"</div>
           ${custPhone ? `<div>Phone: ${custPhone}</div>` : ''}
         </div>` : ''}
 
-        <div class="border-dashed"></div>
+        <div style="border-bottom: 2px dashed #000; margin: 8px 0;"></div>
 
         ${s.show_table_headers !== false ? `
-        <div class="flex font-bold" style="margin-bottom: 4px;">
-          <div class="col-mrp">උපරිම<br/>සිල්ලර<br/>මිල</div>
-          <div class="col-rate" style="display:flex; align-items:flex-end; justify-content:flex-end;">Rate</div>
-          <div class="col-qty" style="display:flex; align-items:flex-end; justify-content:center;">Qty</div>
-          <div class="col-amt" style="display:flex; align-items:flex-end; justify-content:flex-end;">Amount</div>
-        </div>
-        <div class="border-dashed"></div>
-        ` : ''}
+        <table style="width:100%; border-collapse: collapse; table-layout: fixed; font-size: ${fontBody}px;">
+          <thead>
+            <tr>
+              <th style="width:30%; text-align:left; font-weight:900; padding:2px 0;">උපරිම<br/>සිල්ලර<br/>මිල</th>
+              <th style="width:25%; text-align:right; font-weight:900; padding:2px 0;">Rate</th>
+              <th style="width:15%; text-align:center; font-weight:900; padding:2px 0;">Qty</th>
+              <th style="width:30%; text-align:right; font-weight:900; padding:2px 0;">Amount</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${itemsRowsHTML}
+          </tbody>
+        </table>
+        ` : `
+        <table style="width:100%; border-collapse: collapse; table-layout: fixed; font-size: ${fontBody}px;">
+          <tbody>
+            ${itemsRowsHTML}
+          </tbody>
+        </table>
+        `}
 
-        <div style="margin-top: 4px;">
-          ${validItems.map(item => `
-            <div style="margin-bottom: 6px;">
-              <div class="item-name">${item.name}</div>
-              <div class="item-row">
-                <div class="col-mrp">${Number(item.price).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</div>
-                <div class="col-rate">${Number(item.price).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</div>
-                <div class="col-qty">${item.quantity}</div>
-                <div class="col-amt">${Number(item.price * item.quantity).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</div>
-              </div>
-            </div>
-          `).join('')}
-        </div>
-
-        <div class="border-dashed"></div>
+        <div style="border-bottom: 2px dashed #000; margin: 8px 0;"></div>
 
         ${s.show_total_items !== false ? `
-        <div class="flex" style="margin-top: 4px;">
+        <div style="display: flex; justify-content: space-between; font-size: ${fontBody}px; font-weight: 600; margin-top: 4px;">
           <span>Total Items</span>
           <span>${totalQty}</span>
         </div>` : ''}
 
         ${s.show_subtotal !== false ? `
-        <div class="flex" style="margin-top: 2px;">
+        <div style="display: flex; justify-content: space-between; font-size: ${fontBody}px; margin-top: 3px;">
           <span>Subtotal</span>
-          <span>${Number(billSubtotal).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>
+          <span>${Number(billSubtotal).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
         </div>
         ${billDiscount > 0 ? `
-        <div class="flex" style="margin-bottom: 2px;">
+        <div style="display: flex; justify-content: space-between; font-size: ${fontBody}px; margin-top: 2px;">
           <span>Discount</span>
-          <span>${Number(billDiscount).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>
+          <span>-${Number(billDiscount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
         </div>` : ''}
         ` : ''}
 
-        <div class="border-dashed" style="margin: 6px 0;"></div>
+        <div style="border-bottom: 2px dashed #000; margin: 8px 0;"></div>
 
-        <div class="flex total-row">
+        <div style="display: flex; justify-content: space-between; font-size: ${fontTotal}px; font-weight: 900; margin: 6px 0;">
           <span>Total Amount</span>
-          <span>${currency}${Number(billTotal).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>
+          <span>${currency}${Number(billTotal).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+        </div>
+
+        <div style="display: flex; justify-content: space-between; font-size: ${fontBody}px; margin-top: 4px;">
+          <span>Amount Received</span>
+          <span>${Number(billTotal).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
         </div>
 
         ${s.show_payment_details !== false ? `
-        <div class="flex" style="margin-top: 4px;">
-          <span>Payment details</span>
+        <div style="display: flex; justify-content: space-between; font-size: ${fontBody}px; margin-top: 3px;">
+          <span>Payment Details</span>
           <span>${paymentMethod.charAt(0).toUpperCase() + paymentMethod.slice(1)}</span>
         </div>` : ''}
 
-        <div class="border-dashed" style="margin-top: 6px;"></div>
+        <div style="border-bottom: 2px dashed #000; margin-top: 8px;"></div>
 
         ${returnedItems.length > 0 ? `
-        <div class="text-center font-bold" style="margin-top: 15px; font-size: ${s.font_size_body || '12'}px; color: #000;">--- RETURNED ITEMS ---</div>
-        
-        <div class="flex font-bold" style="margin-top: 4px;">
-          <div class="col-mrp" style="width: 50%;">Item</div>
-          <div class="col-qty" style="width: 20%; display:flex; align-items:flex-end; justify-content:center;">R.Qty</div>
-          <div class="col-amt" style="width: 30%; display:flex; align-items:flex-end; justify-content:flex-end;">Refund</div>
-        </div>
-        <div class="border-dashed"></div>
-
-        <div style="margin-top: 4px;">
-          ${returnedItems.map(item => `
-            <div style="margin-bottom: 6px;">
-              <div class="item-name">${item.name}</div>
-              <div class="item-row">
-                <div class="col-mrp" style="width: 50%;"></div>
-                <div class="col-qty" style="width: 20%;">${item.returned_quantity}</div>
-                <div class="col-amt" style="width: 30%;">-${Number(item.price * item.returned_quantity).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</div>
-              </div>
-            </div>
-          `).join('')}
-        </div>
-        <div class="flex font-bold" style="margin-top: 4px;">
+        <div style="text-align: center; font-size: ${fontBody}px; font-weight: bold; margin-top: 10px;">--- RETURNED ITEMS ---</div>
+        <table style="width:100%; border-collapse: collapse; table-layout: fixed; font-size: ${fontBody}px;">
+          <thead>
+            <tr>
+              <th style="width:35%; text-align:left;">Item</th>
+              <th style="width:25%; text-align:left;"></th>
+              <th style="width:20%; text-align:center;">R.Qty</th>
+              <th style="width:20%; text-align:right;">Refund</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${returnedRowsHTML}
+          </tbody>
+        </table>
+        <div style="display: flex; justify-content: space-between; font-weight: bold; margin-top: 4px;">
           <span>Total Refund:</span>
-          <span>-${currency}${Number(totalRefund).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>
+          <span>-${currency}${Number(totalRefund).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
         </div>
-        <div class="border-dashed" style="margin-top: 5px;"></div>
+        <div style="border-bottom: 2px dashed #000; margin: 8px 0;"></div>
         ` : ''}
         
         ${s.show_dynamic_qr !== false ? `
-        <div class="text-center" style="margin: 10px 0;">
-          <img src="https://api.qrserver.com/v1/create-qr-code/?size=100x100&data=${encodeURIComponent(`${s.header_text || 'Shop'}\nBill: ${s.bill_number_prefix || 'INV-'}${receiptId}\nTotal: Rs.${billTotal.toFixed(2)}`)}" style="width: ${s.qr_size || '80'}px; height: ${s.qr_size || '80'}px; filter: grayscale(100%); mix-blend-mode: multiply;" />
-          <div style="font-size: ${s.font_size_body ? s.font_size_body - 2 : '10'}px; margin-top: 3px; color: #333;">Scan for Details</div>
+        <div style="text-align: center; margin: 10px 0;">
+          <img src="https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(`${s.header_text || 'Shop'}\nBill: ${s.bill_number_prefix || 'INV-'}${receiptId}\nTotal: Rs.${billTotal.toFixed(2)}`)}" style="width: ${(s.qr_size || 80) * 1.6}px; height: ${(s.qr_size || 80) * 1.6}px; filter: contrast(150%); display: inline-block;" />
+          <div style="font-size: ${fontWatermark}px; margin-top: 3px; font-weight: bold;">Scan for Details</div>
         </div>` : ''}
 
         ${s.show_footer !== false ? `
-        <div class="text-center footer">${s.footer_text || 'Thank You! Come Again...'}\n${s.footer_text_sinhala || 'ස්තුතියි! නැවත එන්න...'}</div>` : ''}
+        <div style="text-align: center; font-size: ${fontFooter}px; margin-top: 10px; font-weight: 700;">
+          <div>${s.footer_text || 'Thank You! Come Again...'}</div>
+          <div>${s.footer_text_sinhala || 'ස්තුතියි! නැවත එන්න...'}</div>
+        </div>` : ''}
         
-        <div class="border-dotted" style="margin-top: 10px;"></div>
+        <div style="border-bottom: 1px dotted #000; margin-top: 12px;"></div>
 
         ${s.show_watermark !== false ? `
-        <div class="text-center watermark">Powered by Nishadi Enterprise Suite.<br/>Design & Developed by Ceylon Digi Solutions</div>` : ''}
-      </body>
-      </html>
+        <div style="text-align: center; font-size: ${fontWatermark}px; margin-top: 8px; color: #444;">
+          <div>Powered by Nishadi Enterprise Suite.</div>
+          <div>Design & Developed by Ceylon Digi Solutions</div>
+        </div>` : ''}
+      </div>
     `;
     
     if (Capacitor.isNativePlatform()) {
       showToast('Printing bill via Bluetooth...', 'info');
-      printNativeBluetooth(receiptHTML)
+      printNativeBluetooth(receiptHTML, s.paper_size || '80mm')
         .then((msg) => showToast(msg, 'success'))
         .catch((err) => showToast(err, 'error'));
     } else {
@@ -379,7 +394,7 @@ export default function CustomerProfile({ customerId }) {
 
       const doc = iframe.contentWindow.document;
       doc.open();
-      doc.write(receiptHTML);
+      doc.write(`<!DOCTYPE html><html><head><style>@media print { @page { margin: 0; size: ${s.paper_size || '80mm'} auto; } body { margin: 0; padding: 0; } }</style></head><body>${receiptHTML}</body></html>`);
       doc.close();
 
       setTimeout(() => {
@@ -392,25 +407,28 @@ export default function CustomerProfile({ customerId }) {
     }
   }
 
-  const initiateReturn = (order) => {
-    setReturnOrder({
-      orderId: order.id,
-      items: order.order_items.map(i => ({ ...i, returnQty: 0 })),
-      reason: ''
-    })
-  }
-
+  // ✨ FIXED: Discount proportion in return calculation
   const processReturn = async () => {
     const { orderId, items, reason } = returnOrder
     let totalRefund = 0
     let allItemsReturned = true
 
-    // Find the original order to check payment method
+    // Fetch original order to get payment method and total
     const { data: originalOrder } = await supabase
       .from('orders')
-      .select('payment_method')
+      .select('payment_method, total, discount')
       .eq('id', orderId)
       .single()
+
+    // Calculate bill subtotal (sum of item price * quantity) from order_items
+    const { data: orderItems } = await supabase
+      .from('order_items')
+      .select('id, price, quantity, returned_quantity')
+      .eq('order_id', orderId)
+
+    const billSubtotal = (orderItems || []).reduce((sum, item) => sum + (item.price * item.quantity), 0)
+    const orderTotal = originalOrder?.total || billSubtotal
+    const discountRatio = billSubtotal > 0 ? (orderTotal / billSubtotal) : 1
 
     for (const item of items) {
       const newReturnedQty = item.returned_quantity + item.returnQty
@@ -420,7 +438,9 @@ export default function CustomerProfile({ customerId }) {
       }
 
       if (item.returnQty > 0) {
-        totalRefund += item.returnQty * item.price
+        // Refund = item price * returnQty * discountRatio (proportional discount)
+        const refundForItem = item.price * item.returnQty * discountRatio
+        totalRefund += refundForItem
         await supabase.from('order_items').update({ returned_quantity: newReturnedQty }).eq('id', item.id)
         await supabase.rpc('decrement_stock', { bp_id: item.branch_product_id, qty: -item.returnQty })
       }
@@ -430,7 +450,6 @@ export default function CustomerProfile({ customerId }) {
       const newStatus = allItemsReturned ? 'returned' : 'partially_returned'
       await supabase.from('orders').update({ status: newStatus }).eq('id', orderId)
 
-      // Cash return: no credit adjustment
       // Credit return: reduce customer's total_credit
       if (originalOrder?.payment_method === 'credit') {
         const currentCredit = customer?.total_credit || 0
@@ -448,7 +467,7 @@ export default function CustomerProfile({ customerId }) {
         payment_mode: 'return'
       })
 
-      showToast(`Return processed! Refund: Rs. ${totalRefund}`, 'success')
+      showToast(`Return processed! Refund: Rs. ${totalRefund.toFixed(2)}`, 'success')
       loadTransactions()
       loadOrders()
       loadAnalytics()

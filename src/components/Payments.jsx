@@ -113,7 +113,7 @@ export default function Payments() {
 
   const openPaymentModal = (bill) => {
     setSelectedBill(bill)
-    const total = parseFloat(bill.total_amount || bill.total || bill.grand_total || bill.subtotal || bill.amount || 0)
+    const total = parseFloat(bill.total || bill.total_amount || bill.grand_total || bill.subtotal || bill.amount || 0)
     const paid = parseFloat(bill.paid_amount || bill.amount_paid || bill.paid || 0)
     const due = total - paid
     
@@ -163,116 +163,118 @@ export default function Payments() {
     setIsScannerOpen(false)
   }
 
-  // 🖨️ EXACT DESIGN RECEIPT PRINTING FOR PAYMENTS
+  // 🖨️ POS-style receipt printing for payments (table layout, centered, font scaling)
   const printPaymentReceipt = (bill, paidNow, finalTotal) => {
     const s = billSettings || {};
+    const is58 = s.paper_size === '58mm';
+    const printableWidthPx = is58 ? 384 : 576;
+
+    const fontGreeting = (s.font_size_greeting || 14) * (is58 ? 1.5 : 2.2)
+    const fontHeader = (s.font_size_header || 20) * (is58 ? 1.6 : 3.0)
+    const fontContact = (s.font_size_contact || 12) * (is58 ? 1.3 : 2.0)
+    const fontBody = (s.font_size_body || 12) * (is58 ? 1.4 : 2.2)
+    const fontTotal = (s.font_size_total || 15) * (is58 ? 1.6 : 2.6)
+    const fontFooter = (s.font_size_footer || 12) * (is58 ? 1.3 : 2.2)
+    const fontWatermark = (s.font_size_watermark || 9) * (is58 ? 1.1 : 1.8)
+
     const receiptNo = 'PR-' + Date.now().toString().slice(-6);
-    const receiptId = bill.id ? bill.id.slice(0,6).toUpperCase() : 'REC';
-    const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(`PR:${receiptNo}|Bill:${bill.bill_no || receiptId}|Total:${finalTotal}`)}`;
+    const billNo = bill.bill_no || bill.id.slice(0,6).toUpperCase();
     const balanceDue = Math.max(0, finalTotal - ((bill.paid_amount || 0) + paidNow));
+    const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(`PR:${receiptNo}|Bill:${billNo}|Total:${finalTotal}`)}`;
 
+    // Build HTML fragment (not full document)
     const receiptHTML = `
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <style>
-          @page { margin: 0; size: ${s.paper_size || '80mm'} auto; } 
-          body { 
-            font-family: 'Courier New', Courier, monospace, sans-serif; 
-            width: ${s.paper_size === '58mm' ? '48mm' : '72mm'}; 
-            margin: 0 auto; 
-            padding-top: ${s.margin_top !== undefined ? s.margin_top : 10}px;
-            padding-bottom: ${s.margin_bottom !== undefined ? s.margin_bottom : 10}px;
-            padding-left: ${s.margin_left !== undefined ? s.margin_left : 10}px;
-            padding-right: ${s.margin_right !== undefined ? s.margin_right : 10}px;
-            color: #000; 
-            font-size: ${s.font_size_body || '12'}px;
-            line-height: 1.4;
-          }
-          .text-center { text-align: center; }
-          .font-bold { font-weight: bold; }
-          .flex { display: flex; justify-content: space-between; align-items: flex-start; }
-          .border-dashed { border-bottom: 1px dashed #000; margin: 6px 0; }
-          .border-dotted { border-bottom: 1px dotted #000; margin: 6px 0; }
-          
-          .greeting { font-size: ${s.font_size_greeting || '14'}px; margin-bottom: 2px; font-weight: bold; }
-          .header { font-size: ${s.font_size_header || '20'}px; margin-bottom: 2px; font-weight: bold; text-transform: uppercase; }
-          .contact { font-size: ${s.font_size_contact || '12'}px; margin-bottom: 8px; white-space: pre-wrap; }
-          .total-row { font-size: ${s.font_size_total || '15'}px; font-weight: bold; margin: 6px 0; }
-          .footer { font-size: ${s.font_size_footer || '12'}px; margin-top: 8px; white-space: pre-wrap; font-weight: bold; }
-          .watermark { font-size: ${s.font_size_watermark || '9'}px; margin-top: 10px; }
-          .receipt-title { font-size: ${s.font_size_body ? s.font_size_body + 2 : '14'}px; font-weight: bold; margin: 8px 0; background: #000; color: #fff; padding: 3px; text-align: center; }
-        </style>
-      </head>
-      <body>
-        ${s.show_logo !== false && s.logo_url ? `<div class="text-center" style="margin-bottom: 8px;"><img src="${s.logo_url}" style="width: ${s.logo_size || '60'}px; height: auto; filter: grayscale(100%);" /></div>` : ''}
+      <div style="
+        width: 100%;
+        max-width: ${printableWidthPx}px;
+        margin: 0 auto;
+        text-align: center;
+        box-sizing: border-box;
+        padding-top: ${s.margin_top !== undefined ? s.margin_top : 10}px;
+        padding-bottom: ${s.margin_bottom !== undefined ? s.margin_bottom : 10}px;
+        padding-left: ${s.margin_left !== undefined ? s.margin_left : 10}px;
+        padding-right: ${s.margin_right !== undefined ? s.margin_right : 10}px;
+        color: #000000;
+        background-color: #ffffff;
+        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        font-size: ${fontBody}px;
+        line-height: 1.35;
+      ">
+        ${s.show_logo !== false && s.logo_url ? `
+          <div style="text-align: center; margin-bottom: 8px;">
+            <img src="${s.logo_url}" style="width: ${(s.logo_size || 60) * 1.8}px; height: auto; filter: grayscale(100%) contrast(150%); display: inline-block;" />
+          </div>` : ''}
         
-        ${s.show_greeting !== false ? `<div class="text-center greeting">${s.greeting_text || 'ආයුබෝවන්'}</div>` : ''}
-        ${s.show_header !== false ? `<div class="text-center header">${s.header_text || 'SHOP NAME'}</div>` : ''}
-        ${s.show_contact !== false ? `<div class="text-center contact">${s.contact_info || 'Address\nPhone'}</div>` : ''}
+        ${s.show_greeting !== false ? `<div style="text-align: center; font-size: ${fontGreeting}px; font-weight: bold; margin-bottom: 4px;">${s.greeting_text || 'ආයුබෝවන්'}</div>` : ''}
+        ${s.show_header !== false ? `<div style="text-align: center; font-size: ${fontHeader}px; font-weight: 900; margin-bottom: 4px; text-transform: uppercase;">${s.header_text || 'SHOP NAME'}</div>` : ''}
+        ${s.show_contact !== false ? `<div style="text-align: center; font-size: ${fontContact}px; margin-bottom: 8px; white-space: pre-wrap;">${s.contact_info || 'Address\\nPhone'}</div>` : ''}
+        ${s.show_tax_no !== false && s.tax_number ? `<div style="text-align: center; font-size: ${fontContact}px; margin-bottom: 6px; font-weight: bold;">VAT/TAX: ${s.tax_number}</div>` : ''}
 
-        <div class="receipt-title">PAYMENT RECEIPT</div>
+        <div style="margin-top: 8px;"></div>
 
-        <div style="margin-top: 10px;"></div>
-
-        <div class="flex">
+        <div style="display: flex; justify-content: space-between; font-weight: 600; font-size: ${fontBody}px; margin-bottom: 4px;">
           <div>Receipt No: ${receiptNo}</div>
-          <div>Bill No: #${bill.bill_no || receiptId}</div>
+          <div>Bill No: #${billNo}</div>
         </div>
-        <div style="margin-top: 4px;">Date: ${new Date().toLocaleString()}</div>
+        <div style="margin-top: 2px; font-size: ${fontBody}px;">Date: ${new Date().toLocaleString()}</div>
 
-        <div style="margin-top: 4px;">
+        <div style="margin-top: 4px; font-size: ${fontBody}px; font-weight: 600;">
           <div>Customer : "${bill.customers?.name || 'Walk-in'}"</div>
           ${bill.customers?.phone ? `<div>Phone: ${bill.customers.phone}</div>` : ''}
         </div>
 
-        <div class="border-dashed"></div>
+        <div style="border-bottom: 2px dashed #000; margin: 8px 0;"></div>
 
-        <div class="flex" style="margin-top: 4px;">
+        <div style="display: flex; justify-content: space-between; font-size: ${fontBody}px; margin-top: 4px;">
           <span>Bill Total</span>
           <span>${currency}${Number(finalTotal).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>
         </div>
-        <div class="flex" style="margin-top: 2px;">
+        <div style="display: flex; justify-content: space-between; font-size: ${fontBody}px; margin-top: 2px;">
           <span>Prev. Paid</span>
           <span>${currency}${Number(bill.paid_amount || 0).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>
         </div>
-        
-        <div class="border-dashed" style="margin: 6px 0;"></div>
 
-        <div class="flex total-row">
+        <div style="border-bottom: 2px dashed #000; margin: 8px 0;"></div>
+
+        <div style="display: flex; justify-content: space-between; font-size: ${fontTotal}px; font-weight: 900; margin: 6px 0;">
           <span>Paid Now</span>
           <span>${currency}${Number(paidNow).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>
         </div>
 
-        <div class="border-dashed" style="margin: 6px 0;"></div>
+        <div style="border-bottom: 2px dashed #000; margin: 8px 0;"></div>
 
-        <div class="flex font-bold" style="margin-top: 4px;">
+        <div style="display: flex; justify-content: space-between; font-size: ${fontBody}px; font-weight: bold;">
           <span>Balance Due</span>
           <span>${currency}${Number(balanceDue).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>
         </div>
 
-        <div class="border-dashed" style="margin-top: 6px;"></div>
+        <div style="border-bottom: 2px dashed #000; margin-top: 8px;"></div>
         
         ${s.show_dynamic_qr !== false ? `
-        <div class="text-center" style="margin: 10px 0;">
-          <img src="${qrUrl}" style="width: ${s.qr_size || '80'}px; height: ${s.qr_size || '80'}px; filter: grayscale(100%); mix-blend-mode: multiply;" />
-          <div style="font-size: ${s.font_size_body ? s.font_size_body - 2 : '10'}px; margin-top: 3px; color: #333;">Scan for Details</div>
+        <div style="text-align: center; margin: 10px 0;">
+          <img src="${qrUrl}" style="width: ${(s.qr_size || 80) * 1.6}px; height: ${(s.qr_size || 80) * 1.6}px; filter: contrast(150%); display: inline-block;" />
+          <div style="font-size: ${fontWatermark}px; margin-top: 3px; font-weight: bold;">Scan for Details</div>
         </div>` : ''}
 
         ${s.show_footer !== false ? `
-        <div class="text-center footer">${s.footer_text || 'Thank You! Come Again...'}\n${s.footer_text_sinhala || 'ස්තුතියි! නැවත එන්න...'}</div>` : ''}
+        <div style="text-align: center; font-size: ${fontFooter}px; margin-top: 10px; font-weight: 700;">
+          <div>${s.footer_text || 'Thank You! Come Again...'}</div>
+          <div>${s.footer_text_sinhala || 'ස්තුතියි! නැවත එන්න...'}</div>
+        </div>` : ''}
         
-        <div class="border-dotted" style="margin-top: 10px;"></div>
+        <div style="border-bottom: 1px dotted #000; margin-top: 12px;"></div>
 
         ${s.show_watermark !== false ? `
-        <div class="text-center watermark">Powered by Nishadi Enterprise Suite.<br/>Design & Developed by Ceylon Digi Solutions</div>` : ''}
-      </body>
-      </html>
+        <div style="text-align: center; font-size: ${fontWatermark}px; margin-top: 8px; color: #444;">
+          <div>Powered by Nishadi Enterprise Suite.</div>
+          <div>Design & Developed by Ceylon Digi Solutions</div>
+        </div>` : ''}
+      </div>
     `;
 
     if (Capacitor.isNativePlatform()) {
       showToast('Printing payment receipt via Bluetooth...', 'info');
-      printNativeBluetooth(receiptHTML)
+      printNativeBluetooth(receiptHTML, s.paper_size || '80mm')
         .then((msg) => showToast(msg, 'success'))
         .catch((err) => showToast(err, 'error'));
     } else {
@@ -287,7 +289,7 @@ export default function Payments() {
 
       const doc = iframe.contentWindow.document;
       doc.open();
-      doc.write(receiptHTML);
+      doc.write(`<!DOCTYPE html><html><head><style>@media print { @page { margin: 0; size: ${s.paper_size || '80mm'} auto; } body { margin: 0; padding: 0; } }</style></head><body>${receiptHTML}</body></html>`);
       doc.close();
 
       setTimeout(() => {
@@ -319,16 +321,16 @@ export default function Payments() {
 
     let newStatus = selectedBill.status
     if (newPaidAmount >= confirmedTotal) {
-      newStatus = 'Completed'
+      newStatus = 'completed'   // lowercase to match POS
     } else if (newPaidAmount > 0) {
-      newStatus = 'Partial'
+      newStatus = 'partial'
     }
 
     try {
       setLoading(true)
       
       const updatePayload = {
-        total_amount: confirmedTotal,
+        total: confirmedTotal,            // POS orders table uses 'total'
         paid_amount: newPaidAmount,
         status: newStatus
       }
@@ -347,7 +349,9 @@ export default function Payments() {
           branch_id: branch,
           amount_paid: amountToPay
         })
-      } catch (receiptErr) {}
+      } catch (receiptErr) {
+        console.error('Failed to insert payment_receipt:', receiptErr)
+      }
 
       showToast('Payment processed & receipt printed!', 'success')
       setIsModalOpen(false)
@@ -355,11 +359,11 @@ export default function Payments() {
       printPaymentReceipt(selectedBill, amountToPay, confirmedTotal)
       
       const updatedList = allBills.map(b => 
-        b.id === selectedBill.id ? { ...b, total_amount: confirmedTotal, paid_amount: newPaidAmount, status: newStatus } : b
+        b.id === selectedBill.id ? { ...b, total: confirmedTotal, paid_amount: newPaidAmount, status: newStatus } : b
       )
       setAllBills(updatedList)
       setFilteredBills(filteredBills.map(b => 
-        b.id === selectedBill.id ? { ...b, total_amount: confirmedTotal, paid_amount: newPaidAmount, status: newStatus } : b
+        b.id === selectedBill.id ? { ...b, total: confirmedTotal, paid_amount: newPaidAmount, status: newStatus } : b
       ))
       
     } catch (err) {
@@ -425,7 +429,7 @@ export default function Payments() {
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {filteredBills.map(bill => {
-                  const total = parseFloat(bill.total_amount || bill.total || bill.grand_total || bill.subtotal || bill.amount || 0)
+                  const total = parseFloat(bill.total || bill.total_amount || bill.grand_total || bill.subtotal || bill.amount || 0)
                   const paid = parseFloat(bill.paid_amount || bill.amount_paid || bill.paid || 0)
                   const due = total - paid
                   const isPaid = due <= 0

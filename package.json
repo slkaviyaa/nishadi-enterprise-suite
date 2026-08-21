@@ -9,6 +9,7 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@awesome-cordova-plugins/bluetooth-serial": "^9.5.0",
     "@capacitor-community/contacts": "^8.0.0",
     "@capacitor/android": "^8.5.0",
     "@capacitor/cli": "^8.5.0",
